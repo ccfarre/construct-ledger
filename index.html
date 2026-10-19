@@ -182,10 +182,20 @@ let edgeOf = new Map();      // "i:j" -> [papers, i->j, j->i]
 let maxN = 1;
 
 async function load() {
+  /* The three data files normally sit in a data/ folder beside this page. Some
+     uploads flatten that, so each file is tried in data/ first and then beside
+     the page, and the layout stops mattering. */
+  async function grab(name) {
+    for (const path of ["data/" + name, "./" + name]) {
+      try {
+        const r = await fetch(path);
+        if (r.ok) return await r.json();
+      } catch (err) { /* try the next location */ }
+    }
+    throw new Error(name + " not found in data/ or beside index.html");
+  }
   const [c, e, m] = await Promise.all([
-    fetch("data/constructs.json").then(r => r.json()),
-    fetch("data/edges.json").then(r => r.json()),
-    fetch("data/meta.json").then(r => r.json()),
+    grab("constructs.json"), grab("edges.json"), grab("meta.json"),
   ]);
   C = c; E = e; META = m;
   C.forEach((r, i) => {
