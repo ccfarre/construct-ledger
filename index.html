@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Construct Ledger — overlap check</title>
+<style>
+:root{
+  --bg:#fbfaf8; --panel:#ffffff; --ink:#1a1a18; --mute:#6b6a66; --line:#e2e0da;
+  --accent:#2a78d6; --warn:#eb6834; --ok:#1baf7a; --code:#f3f1ec;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  --mono:"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#15161a; --panel:#1c1e23; --ink:#e8e6e1; --mute:#9a988f;
+    --line:#2f3238; --code:#232629;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans);
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1020px;margin:0 auto;padding:0 24px 80px}
+header{border-bottom:1px solid var(--line);padding:38px 0 22px;margin-bottom:28px}
+h1{font:600 25px/1.25 var(--serif);margin:0 0 8px;letter-spacing:-.01em}
+.sub{color:var(--mute);font-size:14px;max-width:62ch;margin:0}
+.scope{margin-top:16px;font:12px/1.5 var(--mono);color:var(--mute)}
+.scope b{color:var(--ink);font-weight:600}
+h2{font:600 16px/1.3 var(--sans);margin:34px 0 10px;letter-spacing:-.005em}
+h2 .count{color:var(--mute);font-weight:400}
+p.note{color:var(--mute);font-size:13px;max-width:72ch;margin:0 0 14px}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:18px}
+.tab{appearance:none;background:none;border:0;border-bottom:2px solid transparent;
+  padding:9px 14px;font:500 14px var(--sans);color:var(--mute);cursor:pointer}
+.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+textarea{width:100%;min-height:150px;padding:12px 14px;border:1px solid var(--line);
+  border-radius:6px;background:var(--panel);color:var(--ink);font:13px/1.6 var(--mono);resize:vertical}
+textarea:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.drop{border:1.5px dashed var(--line);border-radius:6px;padding:22px;text-align:center;
+  color:var(--mute);font-size:13px;background:var(--panel);cursor:pointer;margin-bottom:12px}
+.drop.over{border-color:var(--accent);color:var(--ink)}
+.row{display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap}
+button.go{appearance:none;border:1px solid var(--ink);background:var(--ink);color:var(--bg);
+  padding:8px 16px;border-radius:5px;font:500 14px var(--sans);cursor:pointer}
+button.go:disabled{opacity:.4;cursor:default}
+button.ghost{appearance:none;border:1px solid var(--line);background:none;color:var(--ink);
+  padding:7px 13px;border-radius:5px;font:400 13px var(--sans);cursor:pointer}
+.status{color:var(--mute);font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{text-align:left;font:600 11.5px var(--sans);text-transform:uppercase;letter-spacing:.06em;
+  color:var(--mute);padding:0 10px 7px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:11px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+td.num{font:13px var(--mono);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.r:hover{background:var(--code)}
+.cname{font:500 14px var(--serif)}
+.cdef{color:var(--mute);font-size:12.5px;margin-top:3px;max-width:66ch}
+.tag{display:inline-block;font:500 10.5px var(--sans);text-transform:uppercase;
+  letter-spacing:.05em;padding:2px 6px;border-radius:3px;border:1px solid var(--line);
+  color:var(--mute);white-space:nowrap}
+.tag.nat{border-color:var(--accent);color:var(--accent)}
+.tag.con{border-color:var(--ok);color:var(--ok)}
+.flag{color:var(--warn);font:500 11px var(--sans)}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:16px 18px;margin-bottom:14px}
+.verdict{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;align-items:baseline}
+.verdict dt{font:600 11.5px var(--sans);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);white-space:nowrap}
+.verdict dd{margin:0 0 6px}
+code{font:12.5px var(--mono);background:var(--code);padding:1px 5px;border-radius:3px}
+.empty{color:var(--mute);font-size:13px;font-style:italic;padding:8px 0}
+footer{margin-top:52px;padding-top:22px;border-top:1px solid var(--line);
+  color:var(--mute);font-size:12.5px;max-width:74ch}
+footer h3{font:600 13px var(--sans);color:var(--ink);margin:20px 0 6px}
+footer p{margin:0 0 9px}
+.dot{display:inline-block;width:46px;height:9px;position:relative;vertical-align:middle;margin-left:8px}
+.dot::before{content:"";position:absolute;left:0;right:0;top:4px;height:1px;background:var(--line)}
+.dot i{position:absolute;top:1px;width:7px;height:7px;margin-left:-3.5px;border-radius:50%;
+  background:var(--mute)}
+.dot i.hi{background:var(--warn)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Construct Ledger: overlap check</h1>
+  <p class="sub">Check a working paper against the constructs information systems has already
+  published. The ledger holds every construct the extraction agent recovered from the abstracts
+  of seven AIS basket journals, 1990&ndash;2025, with the definition each paper used.</p>
+  <p class="scope" id="scope">loading ledger&hellip;</p>
+</header>
+
+<div class="tabs" role="tablist">
+  <button class="tab" role="tab" id="t-text" aria-selected="true">Paper text</button>
+  <button class="tab" role="tab" id="t-list" aria-selected="false">Construct list</button>
+</div>
+
+<section id="p-text">
+  <p class="note">Drop a PDF or paste the text. The page scans it for the
+  20,709 construct names and name variants in the ledger and reports which ones your paper
+  already uses. Nothing is uploaded; the file is read in your browser.</p>
+  <div class="drop" id="drop">Drop a PDF here, or click to choose a file</div>
+  <input type="file" id="file" accept="application/pdf,text/plain" hidden>
+  <textarea id="paper" placeholder="or paste the paper text here"></textarea>
+  <div class="row">
+    <button class="go" id="run-text">Find constructs</button>
+    <span class="status" id="st-text"></span>
+  </div>
+</section>
+
+<section id="p-list" hidden>
+  <p class="note">One construct per line, the way you name it in the paper. Each is checked
+  against the ledger under the qualification rule from Section 4.3: two names are the same
+  construct only when one name&rsquo;s token set contains the other&rsquo;s. Names that merely share a
+  head noun are siblings, not synonyms, and that is where the renaming problem lives.</p>
+  <textarea id="list" placeholder="algorithmic accountability&#10;perceived usefulness&#10;platform governance&#10;task-technology fit"></textarea>
+  <div class="row">
+    <button class="go" id="run-list">Check constructs</button>
+    <span class="status" id="st-list"></span>
+  </div>
+</section>
+
+<div id="out"></div>
+
+<footer>
+  <h3>What the matching does</h3>
+  <p>Names are lowercased, stripped of punctuation and whitespace-collapsed before comparison.
+  A paper-text scan looks for exact occurrences of any canonical name or recorded surface-form
+  variant, up to eight words long. A construct-list check applies three tests in order: exact
+  match on a name or variant; token-set containment either way, which the paper treats as the
+  same construct under a qualifier; and a shared head noun without containment, which the paper
+  treats as a sibling and flags.</p>
+  <h3>What a miss does not mean</h3>
+  <p>The ledger reads abstracts. A construct a paper reasons with but does not name in its
+  abstract is invisible here, so absence from the ledger is weak evidence that a construct is
+  new. Treat a miss as an invitation to make the novelty argument, not as proof of it.</p>
+  <h3>Dissent</h3>
+  <p>Origin and artifact proximity are assigned by majority vote across a construct&rsquo;s mentions,
+  and the disagreement rate is kept. External validation on fifty documented constructs found
+  that unanimous labels are correct 95% of the time and labels carrying dissent at or above 0.20
+  are correct in one case out of six. Rows above that threshold are flagged; read them as
+  unresolved rather than as findings.</p>
+  <h3>Propositions</h3>
+  <p>Where two constructs you entered both resolve to the ledger, the page reports how many
+  distinct papers in the corpus assert a relationship between them. Most pairs are asserted by
+  one paper only, so a pair with no assertion is common and is not by itself an opportunity.</p>
+  <h3>What this page will not do</h3>
+  <p>It will not tell you where a new construct should go. The geometric procedure for finding
+  unoccupied regions of the construct space does not recover compositions the field has already
+  made, and that negative result is reported in Section 5.6 of the paper. Until a relational
+  account of composition replaces the midpoint one, a gap suggestion here would be a confident
+  interface over noise.</p>
+  <p id="cite"></p>
+</footer>
+</div>
+
+<script type="module">
+/* pdf.js is fetched on demand, only when someone drops a PDF. Everything else here runs
+   off the three local data files, so a blocked or missing CDN costs the PDF reader and
+   nothing else on the page. */
+const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs";
+let pdfjs = null;
+async function getPdfjs() {
+  if (pdfjs) return pdfjs;
+  pdfjs = await import(PDFJS_URL);
+  pdfjs.GlobalWorkerOptions.workerSrc =
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs";
+  return pdfjs;
+}
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g,
+  c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;" }[c]));
+const norm = s => String(s || "").toLowerCase()
+  .replace(/[^a-z0-9\- ]+/g, " ").replace(/\s+/g, " ").trim();
+
+let C = [], E = [], META = null;
+let byForm = new Map();      // normalized name or variant -> construct index
+let byHead = new Map();      // head noun -> [indices]
+let byToken = new Map();     // token -> [indices]
+let edgeOf = new Map();      // "i:j" -> [papers, i->j, j->i]
+let maxN = 1;
+
+async function load() {
+  const [c, e, m] = await Promise.all([
+    fetch("data/constructs.json").then(r => r.json()),
+    fetch("data/edges.json").then(r => r.json()),
+    fetch("data/meta.json").then(r => r.json()),
+  ]);
+  C = c; E = e; META = m;
+  C.forEach((r, i) => {
+    const names = [norm(r.n), ...(r.f || [])];
+    for (const nm of names) {
+      if (!nm) continue;
+      if (!byForm.has(nm)) byForm.set(nm, i);
+      const t = nm.split(" ");
+      maxN = Math.max(maxN, t.length);
+      const h = t[t.length - 1];
+      if (!byHead.has(h)) byHead.set(h, []);
+      if (!byHead.get(h).includes(i)) byHead.get(h).push(i);
+      for (const tok of new Set(t)) {
+        if (tok.length < 4) continue;
+        if (!byToken.has(tok)) byToken.set(tok, []);
+        const a = byToken.get(tok);
+        if (a[a.length - 1] !== i) a.push(i);
+      }
+    }
+  });
+  maxN = Math.min(maxN, 8);
+  for (const [i, j, p, f, b] of E) edgeOf.set(i + ":" + j, [p, f, b]);
+  $("#scope").innerHTML =
+    `<b>${m.constructs.toLocaleString()}</b> canonical constructs &middot; ` +
+    `<b>${m.surface_forms.toLocaleString()}</b> names and variants &middot; ` +
+    `<b>${m.documents.toLocaleString()}</b> articles &middot; ` +
+    `${m.journals.join(" ")} &middot; ` +
+    `<b>${m.shared_vocabulary}</b> appear in four or more journals, ` +
+    `<b>${m.single_use.toLocaleString()}</b> appear once`;
+  $("#cite").innerHTML =
+    `Built from the construct ledger described in &ldquo;The Construct Ledger: Building and ` +
+    `Auditing a Machine-Read Map of Information Systems Theory&rdquo;. ` +
+    `Corpus of ${m.documents.toLocaleString()} articles, ${m.pairs.toLocaleString()} ` +
+    `construct pairs connected by at least one asserted relationship.`;
+  $("#run-text").disabled = false; $("#run-list").disabled = false;
+}
+
+/* ---------------- tabs ---------------- */
+function tab(which) {
+  const t = which === "text";
+  $("#t-text").setAttribute("aria-selected", t);
+  $("#t-list").setAttribute("aria-selected", !t);
+  $("#p-text").hidden = !t; $("#p-list").hidden = t;
+  $("#out").innerHTML = "";
+}
+$("#t-text").onclick = () => tab("text");
+$("#t-list").onclick = () => tab("list");
+
+/* ---------------- file reading ---------------- */
+$("#drop").onclick = () => $("#file").click();
+["dragenter","dragover"].forEach(ev => $("#drop").addEventListener(ev, e => {
+  e.preventDefault(); $("#drop").classList.add("over");
+}));
+["dragleave","drop"].forEach(ev => $("#drop").addEventListener(ev, e => {
+  e.preventDefault(); $("#drop").classList.remove("over");
+}));
+$("#drop").addEventListener("drop", e => {
+  if (e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]);
+});
+$("#file").onchange = e => { if (e.target.files[0]) readFile(e.target.files[0]); };
+
+async function readFile(f) {
+  const st = $("#st-text");
+  if (f.type === "text/plain") {
+    $("#paper").value = await f.text();
+    st.textContent = `${f.name} loaded`;
+    return;
+  }
+  st.textContent = `reading ${f.name}…`;
+  let lib;
+  try {
+    lib = await getPdfjs();
+  } catch (err) {
+    st.textContent = "the PDF reader could not be loaded; copy the text in instead";
+    return;
+  }
+  try {
+    const buf = await f.arrayBuffer();
+    const doc = await lib.getDocument({ data: buf }).promise;
+    let out = [];
+    for (let p = 1; p <= doc.numPages; p++) {
+      const page = await doc.getPage(p);
+      const tc = await page.getTextContent();
+      out.push(tc.items.map(i => i.str).join(" "));
+      st.textContent = `reading ${f.name}… page ${p} of ${doc.numPages}`;
+    }
+    $("#paper").value = out.join("\n");
+    st.textContent = `${f.name}, ${doc.numPages} pages, ${$("#paper").value.split(/\s+/).length.toLocaleString()} words`;
+  } catch (err) {
+    st.textContent = "could not read that PDF; paste the text instead";
+  }
+}
+
+/* ---------------- rendering helpers ---------------- */
+function dissentCell(v) {
+  const pos = Math.min(1, v / 0.5) * 46;
+  const hi = v >= 0.20;
+  const flag = hi ? ` <span class="flag">unresolved</span>` : "";
+  return `<td class="num">${v.toFixed(2)}<span class="dot" title="dissent ${v.toFixed(2)}, flagged at 0.20"><i class="${hi ? "hi" : ""}" style="left:${pos.toFixed(1)}px"></i></span>${flag}</td>`;
+}
+function constructRows(items) {
+  return items.map(({ i, hits, as }) => {
+    const r = C[i];
+    const orig = r.o === "native_is"
+      ? `<span class="tag nat">native IS</span>`
+      : `<span class="tag">${esc(r.od || "borrowed")}</span>`;
+    const prox = r.p === "constitutive"
+      ? `<span class="tag con">constitutive</span>`
+      : `<span class="tag">${esc(r.p || "")}</span>`;
+    const matched = as && norm(as) !== norm(r.n)
+      ? `<div class="cdef">matched your &ldquo;${esc(as)}&rdquo;</div>` : "";
+    return `<tr class="r">
+      <td><div class="cname">${esc(r.n)}</div>
+        ${r.d ? `<div class="cdef">${esc(r.d)}</div>` : ""}${matched}</td>
+      <td class="num">${r.y0 || ""}</td>
+      <td class="num">${r.m}</td>
+      <td class="num">${(r.j || []).length}</td>
+      <td>${orig}</td>${dissentCell(r.ox)}
+      <td>${prox}</td>${dissentCell(r.px)}
+      ${hits != null ? `<td class="num">${hits}</td>` : ""}
+    </tr>`;
+  }).join("");
+}
+function table(items, withHits) {
+  return `<div class="scroll"><table>
+    <thead><tr>
+      <th>Construct in the ledger</th><th>First</th><th>Papers</th><th>Jrnls</th>
+      <th>Origin</th><th>Dissent</th><th>Artifact</th><th>Dissent</th>
+      ${withHits ? "<th>In yours</th>" : ""}
+    </tr></thead><tbody>${constructRows(items)}</tbody></table></div>`;
+}
+function propositions(idxs) {
+  if (idxs.length < 2) return "";
+  const rows = [];
+  for (let a = 0; a < idxs.length; a++) for (let b = a + 1; b < idxs.length; b++) {
+    const i = Math.min(idxs[a], idxs[b]), j = Math.max(idxs[a], idxs[b]);
+    const e = edgeOf.get(i + ":" + j);
+    rows.push({ i, j, p: e ? e[0] : 0 });
+  }
+  rows.sort((x, y) => y.p - x.p);
+  const shown = rows.filter(r => r.p > 0);
+  const none = rows.length - shown.length;
+  if (!shown.length && !none) return "";
+  return `<h2>Propositions among these constructs <span class="count">${rows.length} pair${rows.length === 1 ? "" : "s"}</span></h2>
+  <p class="note">How many distinct papers in the corpus assert a relationship between each pair.
+  A pair asserted twice or more is as close to a replicated proposition as abstract-level reading
+  can get, and across the corpus very few pairs reach it.</p>
+  ${shown.length ? `<div class="scroll"><table><thead><tr>
+    <th>Pair</th><th>Papers asserting</th><th>Status</th></tr></thead><tbody>
+    ${shown.map(r => `<tr class="r">
+      <td><span class="cname">${esc(C[r.i].n)}</span> &mdash; <span class="cname">${esc(C[r.j].n)}</span></td>
+      <td class="num">${r.p}</td>
+      <td>${r.p >= 2 ? `<span class="tag con">replicated</span>` : `<span class="tag">single paper</span>`}</td>
+    </tr>`).join("")}</tbody></table></div>`
+    : `<p class="empty">No pair among these constructs is asserted by any paper in the corpus.</p>`}
+  ${none && shown.length ? `<p class="note" style="margin-top:10px">${none} of the
+    ${rows.length} pairs are never asserted in the corpus.</p>` : ""}`;
+}
+function downloadBtn(payload, name) {
+  const id = "dl" + Math.random().toString(36).slice(2, 8);
+  setTimeout(() => {
+    const b = document.getElementById(id);
+    if (b) b.onclick = () => {
+      const blob = new Blob([payload], { type: "text/csv" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob); a.download = name; a.click();
+      URL.revokeObjectURL(a.href);
+    };
+  });
+  return `<div class="row"><button class="ghost" id="${id}">Download results as CSV</button></div>`;
+}
+function csv(items) {
+  const head = ["your_name","ledger_construct","verdict","definition","first_year","papers",
+    "journals","origin","origin_discipline","origin_dissent","proximity","proximity_dissent"];
+  const lines = [head.join(",")];
+  for (const it of items) {
+    const r = it.i != null ? C[it.i] : null;
+    const cell = v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+    lines.push([it.as || "", r ? r.n : "", it.verdict || "", r ? r.d : "", r ? r.y0 : "",
+      r ? r.m : "", r ? (r.j || []).join(" ") : "", r ? r.o : "", r ? r.od : "",
+      r ? r.ox : "", r ? r.p : "", r ? r.px : ""].map(cell).join(","));
+  }
+  return lines.join("\n");
+}
+
+/* ---------------- mode 1: scan paper text ---------------- */
+$("#run-text").onclick = () => {
+  const raw = $("#paper").value;
+  if (!raw.trim()) { $("#st-text").textContent = "nothing to scan"; return; }
+  const words = norm(raw).split(" ");
+  const hits = new Map();
+  for (let i = 0; i < words.length; ) {
+    let step = 1;
+    for (let n = Math.min(maxN, words.length - i); n >= 1; n--) {
+      const g = words.slice(i, i + n).join(" ");
+      const k = byForm.get(g);
+      if (k !== undefined) { hits.set(k, (hits.get(k) || 0) + 1); step = n; break; }
+    }
+    i += step;
+  }
+  const items = [...hits.entries()].map(([i, h]) => ({ i, hits: h, verdict: "mentioned" }))
+    .sort((a, b) => b.hits - a.hits || C[a.i].n.localeCompare(C[b.i].n));
+  const shared = items.filter(x => (C[x.i].j || []).length >= 4).length;
+  const once = items.filter(x => C[x.i].m === 1).length;
+  $("#st-text").textContent = `${words.length.toLocaleString()} words scanned`;
+  $("#out").innerHTML = items.length ? `
+    <h2>Constructs your paper shares with the ledger <span class="count">${items.length}</span></h2>
+    <p class="note">${shared} of these are part of the field&rsquo;s shared vocabulary, appearing in four
+    or more of the seven journals. ${once} appear in exactly one paper in the corpus, which means
+    the ledger has seen the name but the field has not reused it.</p>
+    ${table(items, true)}
+    ${downloadBtn(csv(items), "overlap-text.csv")}
+    ${propositions(items.slice(0, 40).map(x => x.i))}`
+    : `<h2>No ledger constructs found</h2><p class="empty">The scan matched none of the
+       20,709 names and variants. For a short abstract that is normal; try the construct list
+       instead, which also reports siblings and near-misses.</p>`;
+  $("#out").scrollIntoView({ behavior: "smooth", block: "start" });
+};
+
+/* ---------------- mode 2: check a construct list ---------------- */
+$("#run-list").onclick = () => {
+  const lines = $("#list").value.split("\n").map(s => s.split("::")[0].trim()).filter(Boolean);
+  if (!lines.length) { $("#st-list").textContent = "nothing to check"; return; }
+  const exact = [], qual = [], spec = [], sib = [], miss = [];
+  for (const line of lines) {
+    const q = norm(line);
+    if (!q) continue;
+    const direct = byForm.get(q);
+    if (direct !== undefined) { exact.push({ i: direct, as: line, verdict: "already in the ledger" }); continue; }
+    const qt = new Set(q.split(" "));
+    const head = q.split(" ").pop();
+    let general = null, specific = null, sibs = [];
+    for (const i of (byHead.get(head) || [])) {
+      for (const nm of [norm(C[i].n), ...(C[i].f || [])]) {
+        if (nm.split(" ").pop() !== head) continue;
+        const nt = new Set(nm.split(" "));
+        const nSubQ = [...nt].every(t => qt.has(t));   // ledger name inside yours: yours is the specification
+        const qSubN = [...qt].every(t => nt.has(t));   // yours inside ledger name: yours is the parent
+        if (nSubQ && general == null) general = i;
+        else if (qSubN && specific == null) specific = i;
+        else if (!nSubQ && !qSubN && !sibs.includes(i)) sibs.push(i);
+      }
+    }
+    if (specific != null) {
+      qual.push({ i: specific, as: line, verdict: "the ledger holds a qualified form of your construct" });
+      continue;
+    }
+    if (general != null) {
+      spec.push({ i: general, as: line, verdict: "your name qualifies an existing construct" });
+      continue;
+    }
+    if (sibs.length) {
+      sibs.sort((a, b) => C[b].m - C[a].m);
+      sib.push({ as: line, cands: sibs.slice(0, 6), verdict: "shares a head noun, not a synonym" });
+      continue;
+    }
+    const toks = [...qt].filter(t => t.length >= 4);
+    const score = new Map();
+    for (const t of toks) for (const i of (byToken.get(t) || []))
+      score.set(i, (score.get(i) || 0) + 1);
+    const near = [...score.entries()].filter(([, s]) => s >= 1)
+      .sort((a, b) => b[1] - a[1] || C[b[0]].m - C[a[0]].m).slice(0, 5).map(([i]) => i);
+    miss.push({ as: line, cands: near, verdict: "not in the ledger" });
+  }
+  const resolved = [...exact, ...qual];
+  $("#st-list").textContent = `${lines.length} checked`;
+  let html = "";
+  if (resolved.length) html += `
+    <h2>Already in the ledger <span class="count">${resolved.length} of ${lines.length}</span></h2>
+    <p class="note">Exact name or variant matches, plus names the qualification rule treats as the
+    same construct because one name&rsquo;s tokens contain the other&rsquo;s.</p>
+    ${table(resolved, false)}`;
+  if (spec.length) html += `
+    <h2>Your name qualifies an existing construct <span class="count">${spec.length}</span></h2>
+    <p class="note">The ledger already holds the unqualified construct, and your name adds a
+    modifier to it. Under the qualification rule these count as the same construct, so a reader
+    may treat your contribution as a specification rather than a new concept. That is a defensible
+    move, and it is also how a good part of the field&rsquo;s tail of 12,535 single-use constructs was
+    made, so the modifier has to be doing theoretical work you can state.</p>
+    ${table(spec, false)}`;
+  if (sib.length) html += `
+    <h2>Shares a head noun with an existing construct <span class="count">${sib.length}</span></h2>
+    <p class="note">These are the ones to look at. The construct below is not the same as yours,
+    because neither name qualifies the other, but it occupies the same family and a reader will
+    ask you to say how your construct differs. In the corpus this pattern is what made embedding
+    similarity merge the two constructs of the technology acceptance model.</p>
+    ${sib.map(s => `<div class="panel"><dl class="verdict">
+      <dt>your name</dt><dd><span class="cname">${esc(s.as)}</span></dd>
+      <dt>siblings</dt><dd>${s.cands.map(i =>
+        `<div style="margin-bottom:7px"><span class="cname">${esc(C[i].n)}</span>
+         <span class="tag" style="margin-left:6px">${C[i].m} paper${C[i].m === 1 ? "" : "s"}</span>
+         ${C[i].d ? `<div class="cdef">${esc(C[i].d)}</div>` : ""}</div>`).join("")}</dd>
+    </dl></div>`).join("")}`;
+  if (miss.length) html += `
+    <h2>Not in the ledger <span class="count">${miss.length}</span></h2>
+    <p class="note">No name or variant matched and no construct shares the head noun. Remember
+    that the ledger reads abstracts, so this is weak evidence of novelty. The nearest constructs
+    by shared vocabulary are listed so you can state the difference rather than assert it.</p>
+    ${miss.map(s => `<div class="panel"><dl class="verdict">
+      <dt>your name</dt><dd><span class="cname">${esc(s.as)}</span></dd>
+      <dt>nearest</dt><dd>${s.cands.length
+        ? s.cands.map(i => `<span class="cname">${esc(C[i].n)}</span>`).join(", ")
+        : `<span class="empty">nothing with a shared discriminating word</span>`}</dd>
+    </dl></div>`).join("")}`;
+  html += downloadBtn(csv([...resolved, ...spec,
+    ...sib.map(s => ({ as: s.as, verdict: s.verdict })),
+    ...miss.map(s => ({ as: s.as, verdict: s.verdict }))]), "overlap-constructs.csv");
+  html += propositions([...resolved, ...spec].map(x => x.i));
+  $("#out").innerHTML = html;
+  $("#out").scrollIntoView({ behavior: "smooth", block: "start" });
+};
+
+$("#run-text").disabled = true; $("#run-list").disabled = true;
+load().catch(e => { $("#scope").textContent = "could not load the ledger data: " + e.message; });
+</script>
+</body>
+</html>
