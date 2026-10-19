@@ -73,10 +73,3 @@ tools/build-ledger-assets \
 ```
 
 Reads only. Makes no API calls and spends nothing.
-
-## Known gap
-
-The corpus-level count of replicated pairs that this script derives does not reproduce the
-figure reported in the paper, which was computed by a separate script. Per-pair counts shown
-on the page come from this build and are traceable to `data/edges.json`; the corpus-level
-figure is deliberately not displayed until the two are reconciled.
