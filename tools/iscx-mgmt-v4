@@ -1,0 +1,557 @@
+#!/usr/bin/env python3
+"""iscx-mgmt: extract theoretical constructs from a cleaned corpus.
+
+This is the only tool in the set that spends money, so it is built to make
+spending deliberate:
+
+  * It does nothing by default. Without --go it prices the job and exits.
+  * --max-cost is a hard ceiling. It stops before the call that would cross it.
+  * Every completed document is appended to a store keyed on doc_id and prompt
+    version. A re-run skips them, so a restart or a duplicate invocation cannot
+    pay for the same document twice.
+  * The API key is read from the environment and sent in a header, never in the
+    URL, so it cannot end up in logs or shell history. There is a self-test for
+    that.
+
+Standard library only. No pip install, no admin rights.
+
+    set the key once per terminal session:
+        $env:GEMINI_API_KEY = "your-key"
+
+    price the job, spending nothing:
+        python iscx-mgmt --corpus corpus_mgmt_clean.jsonl --out ledger_mgmt.jsonl
+
+    run a small pilot:
+        python iscx-mgmt --corpus corpus_mgmt_clean.jsonl --out ledger_mgmt.jsonl \\
+               --limit 200 --max-cost 5 --go
+
+    run the rest:
+        python iscx-mgmt --corpus corpus_mgmt_clean.jsonl --out ledger_mgmt.jsonl \\
+               --max-cost 120 --go
+"""
+import argparse, json, os, platform, random, re, subprocess, sys, threading, time
+import concurrent.futures as cf
+import urllib.error, urllib.parse, urllib.request
+
+ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
+DEFAULT_MODEL = "gemini-3.6-flash"
+
+# Rates used only for the estimate and the running total. Check them against the
+# provider's current pricing; they are what the IS run actually billed at.
+DEF_IN_RATE = 0.30 / 1e6
+DEF_OUT_RATE = 4.00 / 1e6
+# Per-document token figures measured on the IS corpus (8,407 documents).
+EST_IN_FULL, EST_OUT_FULL = 1657, 2561      # measured on the IS corpus
+EST_IN_MIN, EST_OUT_MIN = 516, 285          # measured on the 200-doc management pilot
+
+SYSTEM = (
+    "You are a meticulous research assistant building an auditable ledger of theoretical "
+    "constructs in the management and organization literature. You extract only what the "
+    "text supports. You never invent constructs, and you never import a construct from your "
+    "background knowledge if the abstract does not theorize it.\n\n"
+    "A CONSTRUCT is an abstract theoretical concept the paper reasons with (e.g. "
+    "\"absorptive capacity\", \"organizational identity\", \"perceived usefulness\"). It is NOT: "
+    "a research method, a dataset, a firm, an industry, a country, a statistical technique, "
+    "or a generic research noun (\"study\", \"framework\", \"contribution\", \"analysis\", \"data\").\n\n"
+    "Return ONLY a single JSON object. No prose, no markdown fences."
+)
+
+SCHEMA_MIN = (
+    '{"constructs":[{"name":"...","definition":"...","structural_role":'
+    '"antecedent|outcome|mediator|moderator|focal|context","provenance_span":"..."}],'
+    '"relationships":[{"from":"...","to":"...","type":"increases|decreases|moderates|'
+    'mediates|associated"}]}'
+)
+SCHEMA_FULL = (
+    '{"constructs":[{"name":"...","definition":"...","structural_role":'
+    '"antecedent|outcome|mediator|moderator|focal|context","origin":"native|borrowed",'
+    '"origin_discipline":"...","provenance_span":"..."}],'
+    '"relationships":[{"from":"...","to":"...","type":"increases|decreases|moderates|'
+    'mediates|associated"}],"theory_type":"analysis|explanation|prediction|'
+    'explanation_and_prediction|design_and_action"}'
+)
+
+PROMPTS = {
+    "a": ("Extract the theoretical constructs from this abstract.\n\n"
+          "For each construct give: a normalized name of at most six words; the definition "
+          "as this paper uses it, in one sentence; the structural role it plays in this "
+          "paper's argument; and a provenance span of at least three words copied VERBATIM "
+          "from the abstract.\n\nReturn exactly this shape:\n%s\n\n"
+          "JOURNAL: %s\nYEAR: %s\nTITLE: %s\n\nABSTRACT:\n\"\"\"%s\"\"\""),
+    "b": ("Read the abstract below and list every theoretical construct the paper reasons "
+          "with.\n\nFor each one record: a short normalized name; how this paper defines it; "
+          "the role it plays in the argument; and a verbatim fragment of at least three words "
+          "from the abstract that supports the extraction.\n\nReturn exactly this shape:\n%s\n\n"
+          "JOURNAL: %s\nYEAR: %s\nTITLE: %s\n\nABSTRACT:\n\"\"\"%s\"\"\""),
+}
+
+ROLES = {"antecedent", "outcome", "mediator", "moderator", "focal", "context"}
+
+# The system prompt forbids these, and one still came through in the pilot.
+GENERIC = {"study", "framework", "analysis", "data", "research", "contribution",
+           "model", "theory", "paper", "article", "findings", "results", "literature",
+           "approach", "method", "methodology", "implications", "discussion"}
+
+
+def log(m):
+    sys.stdout.write(m + "\n"); sys.stdout.flush()
+
+
+def warn_about_sleep():
+    if platform.system() != "Windows":
+        return
+    try:
+        out = subprocess.run(["powercfg", "/q", "SCHEME_CURRENT", "SUB_SLEEP", "STANDBYIDLE"],
+                             capture_output=True, text=True, timeout=15).stdout
+        v = re.findall(r"Current AC Power Setting Index:\s*0x([0-9a-fA-F]+)", out)
+        if v and int(v[0], 16):
+            log("\n  NOTE: this machine sleeps after %d minutes on mains power. A long run"
+                % (int(v[0], 16) // 60))
+            log("  stops when it sleeps. Progress is saved and resumes, but you have to"
+                "\n  start it again, so consider changing the setting first.\n")
+    except Exception:
+        pass
+
+
+def get_key():
+    k = os.environ.get("GEMINI_API_KEY", "")
+    if not k:
+        log("\nNo API key. Set it for this terminal session only:")
+        log('\n    $env:GEMINI_API_KEY = "your-key"\n')
+        log("Do not put it in a file in this folder. It would sync to Dropbox and would")
+        log("travel inside any replication archive built from here.\n")
+        sys.exit(2)
+    return k
+
+
+def build_url(model):
+    """The key never goes in the URL. See selftest."""
+    return ENDPOINT % urllib.parse.quote(model)
+
+
+def call_model(url, key, system, user, max_tokens, tries=4):
+    body = json.dumps({
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "user", "parts": [{"text": user}]}],
+        "generationConfig": {"temperature": 0, "maxOutputTokens": max_tokens,
+                             "responseMimeType": "application/json"},
+    }).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method="POST", headers={
+        "Content-Type": "application/json",
+        "x-goog-api-key": key,
+    })
+    delay = 2.0
+    for attempt in range(1, tries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                log("\n  HTTP %d from the model API. The key is missing, wrong or not enabled"
+                    % e.code)
+                log("  for this model. Nothing was charged for this call. Fix the key and")
+                log("  run the same command again; finished documents are not re-sent.\n")
+                sys.exit(3)
+            if e.code in (429, 500, 502, 503, 504) and attempt < tries:
+                log("    http %d, waiting %.0fs" % (e.code, delay))
+                time.sleep(delay); delay = min(delay * 2, 60); continue
+            raise
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+            if attempt < tries:
+                time.sleep(delay); delay = min(delay * 2, 60); continue
+            raise
+    raise RuntimeError("unreachable")
+
+
+def parse_reply(reply):
+    """Pull the JSON object and the token counts out of a provider response."""
+    usage = reply.get("usageMetadata") or {}
+    tin = usage.get("promptTokenCount", 0)
+    tout = usage.get("candidatesTokenCount", 0)
+    txt = ""
+    for c in (reply.get("candidates") or []):
+        for p in ((c.get("content") or {}).get("parts") or []):
+            txt += p.get("text") or ""
+    txt = txt.strip()
+    if txt.startswith("```"):
+        txt = re.sub(r"^```[a-z]*\s*|\s*```$", "", txt)
+    try:
+        return json.loads(txt), tin, tout, None
+    except Exception as e:
+        return None, tin, tout, "response was not JSON: %s" % e
+
+
+def norm_ws(s):
+    return re.sub(r"\s+", " ", (s or "")).strip().lower()
+
+
+def validate(obj, abstract):
+    """Schema and grounding checks. Returns (clean_obj, [problems])."""
+    problems = []
+    if not isinstance(obj, dict):
+        return None, ["top level was not an object"]
+    hay = norm_ws(abstract)
+    out_c = []
+    for c in (obj.get("constructs") or []):
+        if not isinstance(c, dict):
+            problems.append("a construct was not an object"); continue
+        name = (c.get("name") or "").strip()
+        if not name:
+            problems.append("construct with no name"); continue
+        if norm_ws(name) in GENERIC:
+            problems.append("generic research noun, not a construct: %r" % name[:40]); continue
+        if len(name.split()) > 6:
+            problems.append("name longer than six words: %r" % name[:40]); continue
+        span = (c.get("provenance_span") or "").strip()
+        if len(span.split()) < 3:
+            problems.append("provenance span shorter than three words for %r" % name[:40]); continue
+        if norm_ws(span) not in hay:
+            problems.append("provenance span not found verbatim for %r" % name[:40]); continue
+        role = (c.get("structural_role") or "").strip().lower()
+        if role and role not in ROLES:
+            c["structural_role"] = ""
+        out_c.append(c)
+    if not out_c and not problems:
+        problems.append("no constructs returned")
+    obj["constructs"] = out_c
+    return obj, problems
+
+
+REPAIR = ("Your previous answer had these problems:\n%s\n\n"
+          "Return the same JSON object with those problems fixed. A provenance_span must be "
+          "copied VERBATIM from the abstract below, word for word, at least three words long. "
+          "Drop any construct you cannot ground that way rather than inventing a span. Keep "
+          "every construct that was fine.\n\nPREVIOUS ANSWER:\n%s\n\nABSTRACT:\n\"\"\"%s\"\"\"")
+
+
+def extract_one(url, key, user, abstract, max_tokens, repairs):
+    """One document. Returns (obj, problems, tokens_in, tokens_out, attempts, err)."""
+    tin = tout = 0
+    obj = None
+    problems = []
+    prompt = user
+    for attempt in range(1, repairs + 2):
+        reply = call_model(url, key, SYSTEM, prompt, max_tokens)
+        o, ti, to, perr = parse_reply(reply)
+        tin += ti; tout += to
+        if perr:
+            if attempt > repairs:
+                return None, [perr], tin, tout, attempt, perr
+            prompt = REPAIR % (perr, "", abstract)
+            continue
+        obj, problems = validate(o, abstract)
+        if not problems or attempt > repairs:
+            return obj, problems, tin, tout, attempt, None
+        prompt = REPAIR % ("\n".join("- " + p for p in problems),
+                           json.dumps(o, ensure_ascii=False)[:4000], abstract)
+    return obj, problems, tin, tout, repairs + 1, None
+
+
+def load_done(path, version):
+    done = set()
+    if not os.path.exists(path):
+        return done
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            if r.get("prompt_version") == version:
+                done.add(r.get("doc_id"))
+    return done
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="iscx-mgmt")
+    ap.add_argument("--corpus", required=True)
+    ap.add_argument("--out", required=True, help="append-only ledger jsonl; doubles as the resume store")
+    ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--prompt", choices=sorted(PROMPTS), default="a")
+    ap.add_argument("--schema", choices=["min", "full"], default="min",
+                    help="min drops origin and theory type, which the construct check does not use")
+    ap.add_argument("--limit", type=int, default=0, help="stop after this many documents")
+    ap.add_argument("--sample", action="store_true", help="take the --limit documents at random")
+    ap.add_argument("--seed", type=int, default=41)
+    ap.add_argument("--max-cost", type=float, default=0.0,
+                    help="hard ceiling in dollars; the run stops before the call that would cross it")
+    ap.add_argument("--in-rate", type=float, default=DEF_IN_RATE * 1e6,
+                    help="input price per million tokens (default %.2f)" % (DEF_IN_RATE * 1e6))
+    ap.add_argument("--out-rate", type=float, default=DEF_OUT_RATE * 1e6,
+                    help="output price per million tokens (default %.2f)" % (DEF_OUT_RATE * 1e6))
+    ap.add_argument("--max-tokens", type=int, default=4096)
+    ap.add_argument("--repairs", type=int, default=2,
+                    help="repair attempts when a span is not verbatim or the JSON is malformed "
+                         "(default 2; the IS pipeline needed two in almost every case)")
+    ap.add_argument("--failures", default="",
+                    help="jsonl file recording every document that could not be extracted")
+    ap.add_argument("--pause", type=float, default=0.2,
+                    help="seconds between submissions, per worker")
+    ap.add_argument("--workers", type=int, default=8,
+                    help="documents in flight at once (default 8). Each call takes about "
+                         "11 seconds, so serial runs are slow: 8 workers turn a 28-hour "
+                         "corpus into roughly 4 hours. Raise it if you see no 429s, lower "
+                         "it if you do.")
+    ap.add_argument("--go", action="store_true", help="actually spend money; without this it only prices the job")
+    ap.add_argument("--selftest", action="store_true")
+    a = ap.parse_args()
+
+    if a.selftest:
+        return selftest(a)
+
+    in_rate, out_rate = a.in_rate / 1e6, a.out_rate / 1e6
+    version = "%s/%s/%s/r%d" % (a.model, a.prompt, a.schema, a.repairs)
+
+    rows = [json.loads(l) for l in open(a.corpus, encoding="utf-8") if l.strip()]
+    usable = [r for r in rows if r.get("keep") is not False and r.get("abstract")]
+    done = load_done(a.out, version)
+    pending = [r for r in usable if r["doc_id"] not in done]
+    if a.limit:
+        if a.sample:
+            random.Random(a.seed).shuffle(pending)
+        pending = pending[:a.limit]
+
+    est_in, est_out = (EST_IN_MIN, EST_OUT_MIN) if a.schema == "min" else (EST_IN_FULL, EST_OUT_FULL)
+    est = len(pending) * (est_in * in_rate + est_out * out_rate)
+
+    log("=" * 72)
+    log("iscx-mgmt   THIS IS THE STEP THAT SPENDS MONEY")
+    log("=" * 72)
+    log("  corpus                %s" % a.corpus)
+    log("  usable documents      %d" % len(usable))
+    log("  already extracted     %d  (prompt version %s)" % (len(done), version))
+    log("  pending this run      %d" % len(pending))
+    log("  model                 %s" % a.model)
+    log("  schema                %s" % a.schema)
+    log("  rates                 $%.2f per million in, $%.2f per million out"
+        % (a.in_rate, a.out_rate))
+    src = ("measured on a 200-document management pilot" if a.schema == "min"
+           else "measured on the 8,407-document IS corpus")
+    log("  estimated cost        $%.2f   (at %d in / %d out tokens per document," % (est, est_in, est_out))
+    log("                         %s;" % src)
+    log("                         the real figure is metered per call as it runs)")
+    if a.max_cost:
+        log("  hard ceiling          $%.2f" % a.max_cost)
+
+    if not a.go:
+        log("")
+        log("  Nothing was sent and nothing was charged.")
+        log("  Add --go to run it, and set --max-cost to a number you are willing to spend.")
+        log("  A sensible first run is:  --limit 200 --max-cost 5 --go")
+        log("=" * 72)
+        return
+    if not a.max_cost:
+        log("\n  Refusing to run without --max-cost. Set a ceiling you are happy with.\n")
+        sys.exit(2)
+    if not pending:
+        log("\n  Nothing pending. Every usable document is already in %s for this prompt"
+            " version.\n" % a.out)
+        return
+
+    key = get_key()
+    warn_about_sleep()
+    url = build_url(a.model)
+    assert key not in url
+
+    spent = 0.0
+    completed = 0
+    ok = fail = 0
+    grounding_fail = 0
+    attempts_hist = {}
+    failures = open(a.failures, "a", encoding="utf-8") if a.failures else None
+    lock = threading.Lock()
+    stop = threading.Event()
+    per_doc_est = est_in * in_rate + est_out * out_rate
+    t0 = time.time()
+    store = open(a.out, "a", encoding="utf-8")
+    submitted = 0
+
+    def work(rec):
+        """Runs on a worker thread. Never writes shared state directly."""
+        if stop.is_set():
+            return rec, None, None, 0, 0, 0, "stopped"
+        user = PROMPTS[a.prompt] % (
+            SCHEMA_MIN if a.schema == "min" else SCHEMA_FULL,
+            rec.get("journal", ""), rec.get("year", ""), rec.get("title", ""), rec["abstract"])
+        try:
+            obj, problems, tin, tout, attempts, perr = extract_one(
+                url, key, user, rec["abstract"], a.max_tokens, a.repairs)
+            return rec, obj, problems, tin, tout, attempts, perr
+        except SystemExit:
+            stop.set()
+            raise
+        except Exception as e:
+            return rec, None, None, 0, 0, 0, "call failed: %s" % type(e).__name__
+
+    try:
+        with cf.ThreadPoolExecutor(max_workers=max(1, a.workers)) as pool:
+            inflight = {}
+            it = iter(pending)
+            def unit_cost():
+                """What one more document is expected to cost.
+
+                Before any result comes back this can only be the static
+                estimate, which was wrong by 33x in testing. So the pool runs
+                one document first (the probe below), and from then on the
+                guard uses the observed average, never below the estimate.
+                """
+                if completed:
+                    return max(spent / completed, per_doc_est)
+                return per_doc_est
+
+            def fill():
+                nonlocal submitted
+                # until the first result lands, keep exactly one call in flight
+                cap = max(1, a.workers) if completed else 1
+                while len(inflight) < cap and not stop.is_set():
+                    # keep enough headroom for everything already in flight
+                    if spent + unit_cost() * (len(inflight) + 1) > a.max_cost:
+                        return False
+                    try:
+                        rec = next(it)
+                    except StopIteration:
+                        return False
+                    inflight[pool.submit(work, rec)] = rec
+                    submitted += 1
+                    if a.pause:
+                        time.sleep(a.pause)
+                return True
+
+            more = fill()
+            while inflight:
+                done, _ = cf.wait(list(inflight), return_when=cf.FIRST_COMPLETED)
+                for fut in done:
+                    inflight.pop(fut, None)
+                    try:
+                        rec, obj, problems, tin, tout, attempts, perr = fut.result()
+                    except SystemExit:
+                        raise
+                    except Exception as e:
+                        with lock:
+                            fail += 1
+                            record_failure(failures, {"doc_id": "?"}, str(e))
+                        continue
+                    with lock:
+                        spent += tin * in_rate + tout * out_rate
+                        completed += 1
+                        if attempts:
+                            attempts_hist[attempts] = attempts_hist.get(attempts, 0) + 1
+                        if problems and any("provenance span not found" in p for p in problems):
+                            grounding_fail += 1
+                        if obj is None or not obj.get("constructs"):
+                            fail += 1
+                            record_failure(failures, rec,
+                                           perr or "; ".join(problems or []) or "no constructs")
+                        else:
+                            store.write(json.dumps({
+                                "doc_id": rec["doc_id"], "journal": rec.get("journal"),
+                                "year": rec.get("year"), "prompt_version": version,
+                                "tokens_in": tin, "tokens_out": tout,
+                                "problems": problems, "attempts": attempts, "result": obj,
+                            }, ensure_ascii=False) + "\n")
+                            store.flush()
+                            ok += 1
+                        n = ok + fail
+                        if n % 50 == 0 or n == len(pending):
+                            rate = (time.time() - t0) / max(1, n)
+                            log("  %5d/%d   ok %5d   failed %4d   spent $%.2f of $%.2f   ~%d min left"
+                                % (n, len(pending), ok, fail, spent, a.max_cost,
+                                   (len(pending) - n) * rate / 60))
+                if more:
+                    with lock:
+                        more = fill()
+            if submitted < len(pending):
+                log("\n  Stopped after %d of %d documents: the next call would take the run"
+                    " past the $%.2f ceiling." % (submitted, len(pending), a.max_cost))
+    except KeyboardInterrupt:
+        stop.set()
+        log("\n  Interrupted. Everything finished is saved; re-run to continue.")
+    finally:
+        store.close()
+        if failures:
+            failures.close()
+
+    log("")
+    log("  extracted             %d" % ok)
+    log("  failed                %d" % fail)
+    log("  grounding failures    %d  (after %d repair attempt(s))" % (grounding_fail, a.repairs))
+    if attempts_hist:
+        log("  attempts per document %s"
+            % ", ".join("%d: %d" % (k, attempts_hist[k]) for k in sorted(attempts_hist)))
+    if a.failures:
+        log("  failures logged to    %s" % a.failures)
+    log("  actually spent        $%.2f" % spent)
+    log("  wall clock            %.1f min at %d worker(s)" % ((time.time() - t0) / 60, a.workers))
+    log("  ledger                %s" % a.out)
+    log("")
+    log("  Re-running the same command continues where this stopped and will not pay")
+    log("  again for any document already in the ledger.")
+
+
+def record_failure(fh, rec, why):
+    if not fh:
+        return
+    fh.write(json.dumps({"doc_id": rec["doc_id"], "journal": rec.get("journal"),
+                         "year": rec.get("year"), "title": rec.get("title"),
+                         "reason": why}, ensure_ascii=False) + "\n")
+    fh.flush()
+
+
+def selftest(a):
+    fails = []
+
+    def chk(name, got, want):
+        if got == want:
+            log("  ok    %s" % name)
+        else:
+            log("  FAIL  %s: got %r wanted %r" % (name, got, want)); fails.append(name)
+
+    log("iscx-mgmt selftest (no network, no spend)\n")
+    url = build_url("gemini-3.6-flash")
+    chk("key never appears in the URL", "SECRET" in url, False)
+    chk("url has no query string", "?" in url, False)
+
+    abstract = ("Firms that invest in information technology capability achieve superior "
+                "performance when absorptive capacity is high.")
+    good = {"constructs": [{"name": "absorptive capacity", "definition": "d",
+                            "structural_role": "moderator",
+                            "provenance_span": "when absorptive capacity is high"}]}
+    obj, probs = validate(json.loads(json.dumps(good)), abstract)
+    chk("a grounded construct passes", probs, [])
+    chk("it is kept", len(obj["constructs"]), 1)
+
+    bad = {"constructs": [{"name": "dynamic capability", "definition": "d",
+                           "structural_role": "focal",
+                           "provenance_span": "a phrase that is absent"}]}
+    obj, probs = validate(bad, abstract)
+    chk("ungrounded span is caught", any("not found verbatim" in p for p in probs), True)
+    chk("and the construct is dropped", obj["constructs"], [])
+
+    short = {"constructs": [{"name": "x", "definition": "d", "provenance_span": "two words"}]}
+    chk("short span is caught", any("shorter than three" in p for p in validate(short, abstract)[1]), True)
+    longname = {"constructs": [{"name": "a b c d e f g", "definition": "d",
+                                "provenance_span": "Firms that invest"}]}
+    chk("over-long name is caught", any("longer than six words" in p
+        for p in validate(longname, abstract)[1]), True)
+    chk("empty object is reported", validate({}, abstract)[1], ["no constructs returned"])
+
+    gen = {"constructs": [{"name": "Contribution", "definition": "d",
+                           "provenance_span": "Firms that invest"}]}
+    chk("generic noun is rejected", any("generic research noun" in p
+        for p in validate(gen, abstract)[1]), True)
+
+    reply = {"usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 20},
+             "candidates": [{"content": {"parts": [{"text": '```json\n{"constructs":[]}\n```'}]}}]}
+    o, ti, to, err = parse_reply(reply)
+    chk("markdown fences are stripped", (o, ti, to, err), ({"constructs": []}, 10, 20, None))
+
+    log("")
+    if fails:
+        log("%d check(s) failed." % len(fails)); sys.exit(1)
+    log("all checks passed.")
+
+
+if __name__ == "__main__":
+    main()

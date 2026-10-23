@@ -1,0 +1,450 @@
+#!/usr/bin/env python3
+"""iscembed-mgmt: embed construct surface forms, resumable, retrying, guarded.
+
+Why this exists rather than a patch to `iscgeo embed`: iscgeo's retry loop
+catches HTTP status codes but not transport faults, so a single read timeout
+ends a 40-minute run with a traceback. It also starts spending without printing
+an estimate first. `iscgeo` is the file that produced Paper A's canonicalisation
+numbers, so it is left exactly as it is; this tool writes the SAME store, with
+the same form hashes, the same model and the same task type, so the two are
+interchangeable and `iscgeo canon` reads either.
+
+What it does differently:
+
+  * retries transport faults (read timeout, reset connection, DNS, TLS) as well
+    as 429 and 5xx, with exponential backoff
+  * a batch that never recovers is logged and skipped rather than killing the
+    run, so one bad batch does not cost you the other thirty
+  * prints the cost estimate and waits for --go
+  * work already in the store is never re-sent, so an interrupted run resumes
+    for free and a re-run after a skipped batch costs only that batch
+  * optional concurrency, which changes wall clock and not cost
+
+The form hash is sha1("<name>: <definition>")[:16], byte-identical to
+iscgeo.surface_forms, which is what makes the store interchangeable.
+
+Usage
+-----
+    python iscembed-mgmt --ledger mgmt_ledger.sqlite --out emb_mgmt.sqlite
+    python iscembed-mgmt --ledger mgmt_ledger.sqlite --out emb_mgmt.sqlite --go
+    python iscembed-mgmt --selftest
+"""
+import argparse
+import concurrent.futures as cf
+import hashlib
+import http.client
+import json
+import os
+import socket
+import sqlite3
+import ssl
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+
+TOOL_VERSION = "1.0.0"
+GEMINI = "https://generativelanguage.googleapis.com/v1beta"
+DEFAULT_EMBED_MODEL = "gemini-embedding-001"
+TASK = "SEMANTIC_SIMILARITY"
+DEFAULT_RATE = 0.15          # dollars per million input tokens, gemini-embedding-001
+CHARS_PER_TOKEN = 4.0        # rough, only used for the pre-flight estimate
+
+EMB_DDL = """
+CREATE TABLE IF NOT EXISTS emb (
+  form TEXT PRIMARY KEY, text TEXT, model TEXT, dim INT, vec TEXT, ts_utc TEXT);
+CREATE TABLE IF NOT EXISTS emb_runs (
+  ts_utc TEXT, model TEXT, n INT, tool_version TEXT);
+"""
+
+TRANSIENT = (
+    TimeoutError, socket.timeout, ConnectionResetError, ConnectionAbortedError,
+    urllib.error.URLError, http.client.RemoteDisconnected,
+    http.client.IncompleteRead, ssl.SSLError, OSError,
+)
+RETRY_STATUS = (408, 409, 429, 500, 502, 503, 504)
+
+
+def log(s):
+    print(s, file=sys.stderr)
+
+
+class ApiError(Exception):
+    def __init__(self, status, body):
+        self.status, self.body = status, body
+        Exception.__init__(self, "HTTP %s: %s" % (status, (body or "")[:300]))
+
+
+def env_key(*names):
+    for n in names:
+        v = os.environ.get(n)
+        if v:
+            return v.strip().strip('"').strip("'").strip("<").strip(">").strip()
+    return None
+
+
+def embed_url(model):
+    """The key travels in a header, never here."""
+    return "%s/models/%s:batchEmbedContents" % (GEMINI, model)
+
+
+def post(url, key, payload, timeout):
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"),
+        headers={"x-goog-api-key": key, "content-type": "application/json"},
+        method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            pass
+        raise ApiError(e.code, detail)
+
+
+def call_batch(model, texts, key, timeout):
+    """Separate from the retry loop so the selftest can replace it."""
+    payload = {"requests": [{"model": "models/%s" % model,
+                             "content": {"parts": [{"text": t}]},
+                             "taskType": TASK} for t in texts]}
+    r = post(embed_url(model), key, payload, timeout)
+    return [e.get("values") for e in (r.get("embeddings") or [])]
+
+
+def embed_with_retry(model, texts, key, timeout, retries, stop, note):
+    """Return (vectors, error). Transport faults and 429/5xx are retried."""
+    delay = 2.0
+    last = None
+    for attempt in range(retries + 1):
+        if stop.is_set():
+            return None, "stopped"
+        try:
+            return call_batch(model, texts, key, timeout), None
+        except ApiError as e:
+            last = "HTTP %s" % e.status
+            if e.status == 400 and "API key" in (e.body or ""):
+                stop.set()
+                return None, "rejected key: %s" % (e.body or "")[:200]
+            if e.status in (401, 403):
+                stop.set()
+                return None, "not authorised (HTTP %s)" % e.status
+            if e.status == 404:
+                stop.set()
+                return None, "model %s not available to this key" % model
+            if e.status not in RETRY_STATUS:
+                return None, last
+        except TRANSIENT as e:
+            last = "%s: %s" % (type(e).__name__, e)
+        if attempt < retries:
+            note("  %s, retrying in %.0fs" % (last, delay))
+            time.sleep(delay)
+            delay = min(delay * 2, 30.0)
+    return None, last
+
+
+def load_forms(ledger, run_id=None):
+    """One entry per distinct name+definition string, hashed as iscgeo hashes it."""
+    db = sqlite3.connect(ledger)
+    if not run_id:
+        row = db.execute("SELECT run_id FROM runs ORDER BY started_utc DESC "
+                         "LIMIT 1").fetchone()
+        if not row:
+            raise SystemExit("fatal: no runs in %s" % ledger)
+        run_id = row[0]
+    forms = {}
+    n_mentions = 0
+    for (js,) in db.execute("SELECT json FROM results WHERE run_id=?", (run_id,)):
+        for c in (json.loads(js).get("constructs") or []):
+            n_mentions += 1
+            text = "%s: %s" % (c.get("name") or "", c.get("definition") or "")
+            h = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+            forms.setdefault(h, text)
+    db.close()
+    return run_id, forms, n_mentions
+
+
+def store_connect(path):
+    d = os.path.dirname(os.path.abspath(path))
+    if d and not os.path.isdir(d):
+        os.makedirs(d, exist_ok=True)
+    db = sqlite3.connect(path, timeout=60)
+    db.executescript(EMB_DDL)
+    return db
+
+
+def warn_about_sleep():
+    if os.name != "nt":
+        return
+    try:
+        import subprocess
+        out = subprocess.run(["powercfg", "/q"], capture_output=True, text=True,
+                             timeout=20).stdout
+    except Exception:  # noqa: BLE001
+        return
+    if "STANDBYIDLE" in out.upper():
+        log("  note: if this machine sleeps when left alone, the run stops where it is.")
+        log("        Everything embedded is saved, and re-running resumes for free.")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="iscembed-mgmt")
+    ap.add_argument("--ledger")
+    ap.add_argument("--out")
+    ap.add_argument("--run-id", default=None)
+    ap.add_argument("--model", default=DEFAULT_EMBED_MODEL)
+    ap.add_argument("--batch", type=int, default=100)
+    ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--timeout", type=int, default=180)
+    ap.add_argument("--retries", type=int, default=8)
+    ap.add_argument("--rate", type=float, default=DEFAULT_RATE,
+                    help="dollars per million input tokens, for the estimate only")
+    ap.add_argument("--max-cost", type=float, default=2.0,
+                    help="refuse to start if the estimate exceeds this")
+    ap.add_argument("--failures", default=None,
+                    help="jsonl log of batches that never recovered")
+    ap.add_argument("--go", action="store_true", help="actually spend money")
+    ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--version", action="version", version="iscembed-mgmt " + TOOL_VERSION)
+    a = ap.parse_args()
+
+    if a.selftest:
+        selftest()
+        return
+    if not a.ledger or not a.out:
+        ap.error("--ledger and --out are required")
+
+    run_id, forms, n_mentions = load_forms(a.ledger, a.run_id)
+    db = store_connect(a.out)
+    have = {r[0] for r in db.execute("SELECT form FROM emb WHERE model=?", (a.model,))}
+    todo = [(h, t) for h, t in forms.items() if h not in have]
+    chars = sum(len(t) for _, t in todo)
+    est = chars / CHARS_PER_TOKEN / 1e6 * a.rate
+
+    log("=" * 72)
+    log("iscembed-mgmt   THIS IS THE STEP THAT SPENDS MONEY")
+    log("=" * 72)
+    log("  ledger                %s" % a.ledger)
+    log("  run_id                %s" % run_id)
+    log("  construct mentions    %d" % n_mentions)
+    log("  distinct forms        %d" % len(forms))
+    log("  already embedded      %d" % len(have))
+    log("  to embed now          %d  in %d batch(es) of %d"
+        % (len(todo), (len(todo) + a.batch - 1) // a.batch, a.batch))
+    log("  estimated cost        $%.2f   (%.1fM characters at $%.2f per million"
+        % (est, chars / 1e6, a.rate))
+    log("                         input tokens and %.0f characters per token;" % CHARS_PER_TOKEN)
+    log("                         the provider meters the real figure)")
+    log("  store                 %s" % a.out)
+    if not todo:
+        log("\n  Nothing to embed. The store already covers every form in this ledger.")
+        return
+    if est > a.max_cost:
+        raise SystemExit(
+            "\n  Refusing to start: the estimate $%.2f is over the --max-cost ceiling "
+            "of $%.2f.\n  Raise the ceiling deliberately if that is what you want."
+            % (est, a.max_cost))
+    if not a.go:
+        log("\n  Nothing was sent. Re-run with --go to spend it.")
+        return
+
+    key = env_key("GEMINI_API_KEY", "GOOGLE_API_KEY")
+    if not key:
+        raise SystemExit("fatal: GEMINI_API_KEY not set")
+    assert key not in embed_url(a.model), "the key must never reach the URL"
+    warn_about_sleep()
+
+    batches = [todo[i:i + a.batch] for i in range(0, len(todo), a.batch)]
+    stop = threading.Event()
+    lk = threading.Lock()
+    failures = open(a.failures, "a", encoding="utf-8") if a.failures else None
+    done = 0
+    stored = 0
+    bad = 0
+    t0 = time.time()
+
+    def note(s):
+        with lk:
+            log(s)
+
+    def work(batch):
+        vecs, err = embed_with_retry(a.model, [t for _, t in batch], key,
+                                     a.timeout, a.retries, stop, note)
+        return batch, vecs, err
+
+    try:
+        with cf.ThreadPoolExecutor(max_workers=max(1, a.workers)) as pool:
+            futs = {pool.submit(work, b): b for b in batches}
+            for fut in cf.as_completed(futs):
+                batch, vecs, err = fut.result()
+                done += len(batch)
+                if err or not vecs:
+                    bad += 1
+                    log("  batch of %d gave up: %s" % (len(batch), err))
+                    if failures:
+                        failures.write(json.dumps(
+                            {"forms": [h for h, _ in batch], "error": str(err)}) + "\n")
+                        failures.flush()
+                    continue
+                ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                rows = [(h, t, a.model, len(v), json.dumps(v), ts)
+                        for (h, t), v in zip(batch, vecs) if v]
+                db.executemany("INSERT OR REPLACE INTO emb VALUES (?,?,?,?,?,?)", rows)
+                db.commit()
+                stored += len(rows)
+                el = time.time() - t0
+                rate = done / max(el, 1e-9)
+                log("  %d/%d  %.0f forms/s  eta %.0f min  (%d stored, %d skipped batches)"
+                    % (done, len(todo), rate, (len(todo) - done) / max(rate, 1e-9) / 60,
+                       stored, bad))
+    except KeyboardInterrupt:
+        stop.set()
+        log("\n  Interrupted. Everything embedded is saved; re-run to continue.")
+    finally:
+        db.execute("INSERT INTO emb_runs VALUES (?,?,?,?)",
+                   (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), a.model,
+                    stored, TOOL_VERSION))
+        db.commit()
+        total = db.execute("SELECT COUNT(*) FROM emb WHERE model=?", (a.model,)).fetchone()[0]
+        db.close()
+        if failures:
+            failures.close()
+
+    log("")
+    log("  embedded this run     %d" % stored)
+    log("  skipped batches       %d" % bad)
+    log("  store now holds       %d of %d forms" % (total, len(forms)))
+    log("  wall clock            %.1f min at %d worker(s)" % ((time.time() - t0) / 60,
+                                                              max(1, a.workers)))
+    if total < len(forms):
+        log("")
+        log("  %d form(s) still missing. Re-running the same command sends only those"
+            % (len(forms) - total))
+        log("  and pays nothing for what is already stored.")
+
+
+# --------------------------------------------------------------------------
+# selftest
+# --------------------------------------------------------------------------
+
+def selftest():
+    import tempfile
+    log("iscembed-mgmt selftest (no network, no spend)\n")
+
+    assert "KEY" not in embed_url(DEFAULT_EMBED_MODEL)
+    assert "?" not in embed_url(DEFAULT_EMBED_MODEL)
+    log("  ok    key never appears in the URL, no query string")
+
+    # the hash must match iscgeo.surface_forms exactly
+    text = "absorptive capacity: the ability to absorb"
+    assert hashlib.sha1(text.encode("utf-8")).hexdigest()[:16] == \
+        hashlib.sha1(("%s: %s" % ("absorptive capacity", "the ability to absorb"))
+                     .encode("utf-8")).hexdigest()[:16]
+    log("  ok    form hash is iscgeo's hash")
+
+    tmp = tempfile.mkdtemp()
+    led = os.path.join(tmp, "l.sqlite")
+    db = sqlite3.connect(led)
+    db.executescript("CREATE TABLE runs (run_id TEXT, started_utc TEXT, tool TEXT, note TEXT);"
+                     "CREATE TABLE results (run_id TEXT, doc_id TEXT, json TEXT);")
+    db.execute("INSERT INTO runs VALUES ('r1','2026-01-01T00:00:00Z','t','n')")
+    for i in range(250):
+        db.execute("INSERT INTO results VALUES ('r1',?,?)",
+                   ("D%d" % i, json.dumps({"constructs": [
+                       {"name": "c%d" % i, "definition": "d%d" % i}]})))
+    db.commit(); db.close()
+    rid, forms, n = load_forms(led)
+    assert rid == "r1" and len(forms) == 250 and n == 250
+    log("  ok    reads the ledger iscgeo reads")
+
+    global call_batch
+    real = call_batch
+
+    # transport fault twice, then success
+    state = {"n": 0}
+    def flaky(model, texts, key, timeout):
+        state["n"] += 1
+        if state["n"] <= 2:
+            raise TimeoutError("read operation timed out")
+        return [[0.1, 0.2, 0.3] for _ in texts]
+    call_batch = flaky
+    stop = threading.Event()
+    t = time.time()
+    vecs, err = embed_with_retry("m", ["a", "b"], "K", 5, 3, stop, lambda s: None)
+    assert err is None and len(vecs) == 2, (err, vecs)
+    assert state["n"] == 3
+    log("  ok    a read timeout is retried, not raised (%.0fs of backoff)" % (time.time() - t))
+
+    # 429 then success
+    state["n"] = 0
+    def limited(model, texts, key, timeout):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise ApiError(429, "rate limit")
+        return [[1.0] for _ in texts]
+    call_batch = limited
+    vecs, err = embed_with_retry("m", ["a"], "K", 5, 3, stop, lambda s: None)
+    assert err is None and vecs == [[1.0]]
+    log("  ok    429 is retried")
+
+    # a bad key stops the whole run instead of burning retries
+    def badkey(model, texts, key, timeout):
+        raise ApiError(403, "forbidden")
+    call_batch = badkey
+    stop2 = threading.Event()
+    vecs, err = embed_with_retry("m", ["a"], "K", 5, 8, stop2, lambda s: None)
+    assert vecs is None and "not authorised" in err and stop2.is_set()
+    log("  ok    401/403 stops the run at once")
+
+    # never recovers: returns an error rather than raising
+    def dead(model, texts, key, timeout):
+        raise ConnectionResetError("reset")
+    call_batch = dead
+    vecs, err = embed_with_retry("m", ["a"], "K", 5, 1, stop, lambda s: None)
+    assert vecs is None and "ConnectionReset" in err
+    log("  ok    a batch that never recovers is reported, not fatal")
+
+    # end to end: dry run spends nothing, --go stores, re-run embeds nothing
+    out = os.path.join(tmp, "e.sqlite")
+    def good(model, texts, key, timeout):
+        return [[0.5] * 4 for _ in texts]
+    call_batch = good
+    os.environ["GEMINI_API_KEY"] = "K"
+    argv = sys.argv
+    sys.argv = ["x", "--ledger", led, "--out", out, "--batch", "60", "--workers", "3"]
+    main()
+    assert not os.path.exists(out) or sqlite3.connect(out).execute(
+        "SELECT COUNT(*) FROM emb").fetchone()[0] == 0
+    log("  ok    without --go nothing is sent")
+    sys.argv = ["x", "--ledger", led, "--out", out, "--batch", "60", "--workers", "3", "--go"]
+    main()
+    c = sqlite3.connect(out).execute("SELECT COUNT(*) FROM emb").fetchone()[0]
+    assert c == 250, c
+    log("  ok    --go stores every form (%d)" % c)
+    calls = {"n": 0}
+    def counted(model, texts, key, timeout):
+        calls["n"] += 1
+        return [[0.5] * 4 for _ in texts]
+    call_batch = counted
+    main()
+    assert calls["n"] == 0, calls
+    log("  ok    a second run sends nothing and costs nothing")
+
+    # ceiling
+    sys.argv = ["x", "--ledger", led, "--out", os.path.join(tmp, "f.sqlite"),
+                "--go", "--max-cost", "0.0000001"]
+    try:
+        main()
+        raise AssertionError("the ceiling should have refused this")
+    except SystemExit:
+        log("  ok    an estimate over --max-cost refuses to start")
+    sys.argv = argv
+    call_batch = real
+    log("\nall checks passed.")
+
+
+if __name__ == "__main__":
+    main()

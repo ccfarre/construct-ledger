@@ -3,513 +3,705 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Construct Ledger — overlap check</title>
+<title>Construct Ledger</title>
 <style>
 :root{
-  --bg:#fbfaf8; --panel:#ffffff; --ink:#1a1a18; --mute:#6b6a66; --line:#e2e0da;
-  --accent:#2a78d6; --warn:#eb6834; --ok:#1baf7a; --code:#f3f1ec;
-  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
-  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
-  --mono:"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  color-scheme: light;
+  --paper:#ffffff; --wash:#f4f6f7; --rule:#dde2e5; --rule-soft:#eaeef0;
+  --ink:#10161b; --ink-2:#44515c; --ink-3:#78858f;
+  --s1:#00897b; --s2:#c1440e; --mark:#ffeec2;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+  --sans:"Helvetica Neue",Helvetica,Arial,system-ui,sans-serif;
+  --mono:"SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
 }
-@media (prefers-color-scheme:dark){
+@media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
-    --bg:#15161a; --panel:#1c1e23; --ink:#e8e6e1; --mute:#9a988f;
-    --line:#2f3238; --code:#232629;
+    color-scheme: dark;
+    --paper:#14171a; --wash:#1b2024; --rule:#2d343a; --rule-soft:#232a2f;
+    --ink:#eef1f3; --ink-2:#b2bdc5; --ink-3:#808d96;
+    --s1:#2aa394; --s2:#dd6a33; --mark:#53431a;
   }
 }
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --paper:#14171a; --wash:#1b2024; --rule:#2d343a; --rule-soft:#232a2f;
+  --ink:#eef1f3; --ink-2:#b2bdc5; --ink-3:#808d96;
+  --s1:#2aa394; --s2:#dd6a33; --mark:#53431a;
+}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans);
-  -webkit-font-smoothing:antialiased}
-.wrap{max-width:1020px;margin:0 auto;padding:0 24px 80px}
-header{border-bottom:1px solid var(--line);padding:38px 0 22px;margin-bottom:28px}
-h1{font:600 25px/1.25 var(--serif);margin:0 0 8px;letter-spacing:-.01em}
-.sub{color:var(--mute);font-size:14px;max-width:62ch;margin:0}
-.scope{margin-top:16px;font:12px/1.5 var(--mono);color:var(--mute)}
-.scope b{color:var(--ink);font-weight:600}
-h2{font:600 16px/1.3 var(--sans);margin:34px 0 10px;letter-spacing:-.005em}
-h2 .count{color:var(--mute);font-weight:400}
-p.note{color:var(--mute);font-size:13px;max-width:72ch;margin:0 0 14px}
-.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:18px}
-.tab{appearance:none;background:none;border:0;border-bottom:2px solid transparent;
-  padding:9px 14px;font:500 14px var(--sans);color:var(--mute);cursor:pointer}
-.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
-textarea{width:100%;min-height:150px;padding:12px 14px;border:1px solid var(--line);
-  border-radius:6px;background:var(--panel);color:var(--ink);font:13px/1.6 var(--mono);resize:vertical}
-textarea:focus{outline:2px solid var(--accent);outline-offset:-1px}
-.drop{border:1.5px dashed var(--line);border-radius:6px;padding:22px;text-align:center;
-  color:var(--mute);font-size:13px;background:var(--panel);cursor:pointer;margin-bottom:12px}
-.drop.over{border-color:var(--accent);color:var(--ink)}
-.row{display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap}
-button.go{appearance:none;border:1px solid var(--ink);background:var(--ink);color:var(--bg);
-  padding:8px 16px;border-radius:5px;font:500 14px var(--sans);cursor:pointer}
-button.go:disabled{opacity:.4;cursor:default}
-button.ghost{appearance:none;border:1px solid var(--line);background:none;color:var(--ink);
-  padding:7px 13px;border-radius:5px;font:400 13px var(--sans);cursor:pointer}
-.status{color:var(--mute);font-size:13px}
-table{width:100%;border-collapse:collapse;font-size:13.5px}
-th{text-align:left;font:600 11.5px var(--sans);text-transform:uppercase;letter-spacing:.06em;
-  color:var(--mute);padding:0 10px 7px;border-bottom:1px solid var(--line);white-space:nowrap}
-td{padding:11px 10px;border-bottom:1px solid var(--line);vertical-align:top}
-td.num{font:13px var(--mono);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-tr.r:hover{background:var(--code)}
-.cname{font:500 14px var(--serif)}
-.cdef{color:var(--mute);font-size:12.5px;margin-top:3px;max-width:66ch}
-.tag{display:inline-block;font:500 10.5px var(--sans);text-transform:uppercase;
-  letter-spacing:.05em;padding:2px 6px;border-radius:3px;border:1px solid var(--line);
-  color:var(--mute);white-space:nowrap}
-.tag.nat{border-color:var(--accent);color:var(--accent)}
-.tag.con{border-color:var(--ok);color:var(--ok)}
-.flag{color:var(--warn);font:500 11px var(--sans)}
-.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:16px 18px;margin-bottom:14px}
-.verdict{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;align-items:baseline}
-.verdict dt{font:600 11.5px var(--sans);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);white-space:nowrap}
-.verdict dd{margin:0 0 6px}
-code{font:12.5px var(--mono);background:var(--code);padding:1px 5px;border-radius:3px}
-.empty{color:var(--mute);font-size:13px;font-style:italic;padding:8px 0}
-footer{margin-top:52px;padding-top:22px;border-top:1px solid var(--line);
-  color:var(--mute);font-size:12.5px;max-width:74ch}
-footer h3{font:600 13px var(--sans);color:var(--ink);margin:20px 0 6px}
-footer p{margin:0 0 9px}
-.dot{display:inline-block;width:46px;height:9px;position:relative;vertical-align:middle;margin-left:8px}
-.dot::before{content:"";position:absolute;left:0;right:0;top:4px;height:1px;background:var(--line)}
-.dot i{position:absolute;top:1px;width:7px;height:7px;margin-left:-3.5px;border-radius:50%;
-  background:var(--mute)}
-.dot i.hi{background:var(--warn)}
-[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--paper);color:var(--ink);
+  font-family:var(--serif);font-size:16px;line-height:1.6;position:relative;
+  -webkit-font-smoothing:antialiased;font-kerning:normal}
+.wrap{max-width:860px;margin:0 auto;padding:0 20px 96px}
+header{padding:48px 0 0}
+h1{font-size:32px;line-height:1.15;margin:0 0 10px;font-weight:600;letter-spacing:-0.012em}
+.sub{color:var(--ink-2);font-size:16.5px;margin:0;max-width:62ch;line-height:1.55}
+.corpus{font-family:var(--sans);font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink-3);margin:18px 0 0;padding-top:14px;border-top:1px solid var(--rule)}
+nav{display:flex;gap:26px;flex-wrap:wrap;margin:26px 0 40px;
+  border-bottom:1px solid var(--rule);font-family:var(--sans)}
+nav button{appearance:none;background:none;border:0;border-bottom:1.5px solid transparent;
+  padding:0 0 10px;font:inherit;font-size:12px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-3);cursor:pointer;margin-bottom:-1px}
+nav button:hover{color:var(--ink)}
+nav button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--s1)}
+.panel[hidden]{display:none}
+h2{font-size:21px;margin:52px 0 6px;font-weight:600;letter-spacing:-0.008em}
+h2:first-child{margin-top:0}
+h3.sec{font-family:var(--sans);font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:600;margin:26px 0 8px}
+.note{color:var(--ink-2);font-size:15px;margin:6px 0 20px;max-width:64ch}
+.lede{font-size:16px;color:var(--ink-2);max-width:64ch;margin:6px 0 26px}
+
+/* key figures: a rule-separated row, not cards */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
+  border-top:1px solid var(--ink);border-bottom:1px solid var(--rule);margin:26px 0 10px}
+.tile{padding:14px 18px 15px 0}
+.tile+.tile{border-left:1px solid var(--rule-soft);padding-left:18px}
+.tile .v{font-size:26px;font-weight:600;letter-spacing:-0.02em;font-variant-numeric:tabular-nums;
+  line-height:1.1}
+.tile .k{font-family:var(--sans);font-size:11.5px;color:var(--ink-3);margin-top:7px;
+  line-height:1.4;max-width:24ch}
+
+/* figures, journal style */
+figure{margin:26px 0 34px;padding:0}
+figcaption{font-size:14px;color:var(--ink-2);margin-top:14px;max-width:68ch;line-height:1.5;
+  padding-top:10px;border-top:1px solid var(--rule)}
+figcaption .fn{font-family:var(--sans);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:600;margin-right:7px}
+figcaption b{color:var(--ink);font-weight:600}
+figcaption .nt{display:block;margin-top:6px;font-size:13.5px;color:var(--ink-3)}
+.fig-row{display:grid;grid-template-columns:1fr 1fr;gap:34px}
+@media (max-width:720px){.fig-row{grid-template-columns:1fr}.tile+.tile{border-left:0}}
+svg{display:block;width:100%;height:auto;overflow:visible}
+.ax{stroke:var(--ink-3);stroke-width:1;shape-rendering:crispEdges}
+.tkm{stroke:var(--ink-3);stroke-width:1;shape-rendering:crispEdges}
+.gr{stroke:var(--rule);stroke-width:1;shape-rendering:crispEdges}
+.tk{fill:var(--ink-3);font-size:10px;font-family:var(--sans);font-variant-numeric:tabular-nums}
+.al{fill:var(--ink-3);font-size:10.5px;font-family:var(--sans);font-style:italic}
+.dl{font-size:10.5px;font-family:var(--sans);font-weight:600;
+  font-variant-numeric:tabular-nums}
+.sl{font-size:11px;font-family:var(--sans);font-weight:600}
+.pl{fill:var(--ink);font-size:12px;font-family:var(--sans);font-weight:700}
+
+/* controls */
+input[type=search],input[type=text],textarea,select{
+  font-family:var(--sans);font-size:14px;color:var(--ink);background:var(--paper);
+  border:0;border-bottom:1px solid var(--ink-3);border-radius:0;padding:8px 2px;width:100%}
+input:focus,textarea:focus,select:focus{outline:0;border-bottom-color:var(--s1)}
+textarea{min-height:150px;resize:vertical;border:1px solid var(--rule);padding:12px;
+  font-family:var(--serif);font-size:15px;line-height:1.6;background:var(--wash)}
+button.act{appearance:none;font-family:var(--sans);font-size:11.5px;letter-spacing:.08em;
+  text-transform:uppercase;font-weight:600;cursor:pointer;background:var(--ink);
+  color:var(--paper);border:1px solid var(--ink);border-radius:0;padding:9px 16px}
+button.act.ghost{background:none;color:var(--ink)}
+button.act:hover{opacity:.85}
+.row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;margin:16px 0 26px}
+.row > *{flex:0 0 auto}
+.grow{flex:1 1 240px}
+.fld{font-family:var(--sans);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-3);display:block;margin-bottom:3px}
+
+/* tables */
+table{border-collapse:collapse;width:100%;font-size:14.5px}
+th,td{text-align:left;padding:8px 14px 8px 0;border-bottom:1px solid var(--rule-soft);
+  vertical-align:baseline}
+th+th,td+td{padding-left:16px}
+thead th{font-family:var(--sans);font-size:10.5px;color:var(--ink-3);font-weight:600;
+  text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid var(--ink)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--sans);
+  font-size:13px;padding-right:4px;white-space:nowrap}
+tbody tr{cursor:pointer}
+tbody tr:hover td{background:var(--wash)}
+
+/* detail */
+.detail{border-top:2px solid var(--ink);padding-top:22px;margin-top:34px}
+.detail h3{font-size:24px;margin:0 0 4px;font-weight:600;letter-spacing:-0.01em}
+.meta{font-family:var(--sans);font-size:11.5px;color:var(--ink-3);letter-spacing:.03em;
+  margin:0 0 20px}
+.pill{display:inline-block;font-family:var(--sans);font-size:10.5px;padding:1px 0;
+  color:var(--ink-3);margin-right:12px;letter-spacing:.04em}
+.defn{padding:0 0 0 16px;margin:14px 0;border-left:1px solid var(--rule);font-size:15.5px}
+.defn .m{font-family:var(--sans);font-size:11px;color:var(--ink-3);margin-top:5px;
+  letter-spacing:.02em}
+.prov{padding:0 0 0 16px;border-left:2px solid var(--rule);margin:14px 0;font-size:14.5px;
+  line-height:1.65;color:var(--ink-2)}
+.prov mark{background:var(--mark);color:var(--ink);padding:0 2px}
+.prov .m{font-family:var(--sans);font-size:11px;color:var(--ink-3);margin-top:6px;
+  letter-spacing:.02em}
+a{color:inherit;text-decoration-color:var(--s1);text-underline-offset:2px}
+a:hover{color:var(--s1)}
+.empty{color:var(--ink-3);font-size:15px;padding:24px 0;max-width:62ch}
+.warn{border-left:2px solid var(--s2);padding:2px 0 2px 16px;margin:16px 0;
+  font-size:14.5px;color:var(--ink-2);max-width:68ch}
+.warn b{color:var(--ink)}
+.foot{margin-top:64px;padding-top:16px;border-top:1px solid var(--rule);
+  font-family:var(--sans);font-size:11.5px;color:var(--ink-3);max-width:70ch;line-height:1.6}
+.toggle{position:absolute;top:22px;right:20px;font-family:var(--sans);font-size:10.5px;
+  letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);background:none;
+  border:0;cursor:pointer;padding:4px}
+.toggle:hover{color:var(--ink)}
+code{font-family:var(--mono);font-size:.88em;color:var(--ink-2)}
+em{font-style:italic}
 </style>
 </head>
 <body>
+<button class="toggle" id="themeBtn">theme</button>
 <div class="wrap">
 <header>
-  <h1>Construct Ledger: overlap check</h1>
-  <p class="sub">Check a working paper against the constructs information systems has already
-  published. The ledger holds every construct the extraction agent recovered from the abstracts
-  of seven AIS basket journals, 1990&ndash;2025, with the definition each paper used.</p>
-  <p class="scope" id="scope">loading ledger&hellip;</p>
+  <h1>Construct Ledger</h1>
+  <p class="sub">Every theoretical construct stated in the abstracts of five management and
+  organization journals, extracted with a verbatim span from the text it came from, merged
+  at a calibrated threshold, and open to inspection.</p>
+  <p class="corpus" id="corpusLine">loading…</p>
 </header>
 
-<div class="tabs" role="tablist">
-  <button class="tab" role="tab" id="t-text" aria-selected="true">Paper text</button>
-  <button class="tab" role="tab" id="t-list" aria-selected="false">Construct list</button>
-</div>
+<nav id="tabs">
+  <button data-p="overview" aria-selected="true">Overview</button>
+  <button data-p="check" aria-selected="false">Check a paper</button>
+  <button data-p="browse" aria-selected="false">Browse the ledger</button>
+  <button data-p="instrument" aria-selected="false">The instrument</button>
+</nav>
 
-<section id="p-text">
-  <p class="note">Drop a PDF or paste the text. The page scans it for the
-  20,709 construct names and name variants in the ledger and reports which ones your paper
-  already uses. Nothing is uploaded; the file is read in your browser.</p>
-  <div class="drop" id="drop">Drop a PDF here, or click to choose a file</div>
-  <input type="file" id="file" accept="application/pdf,text/plain" hidden>
-  <textarea id="paper" placeholder="or paste the paper text here"></textarea>
-  <div class="row">
-    <button class="go" id="run-text">Find constructs</button>
-    <span class="status" id="st-text"></span>
+<section class="panel" id="p-overview">
+  <div class="tiles" id="tiles"></div>
+  <p class="note">Every figure on this page is drawn from the files in <code>data/</code>,
+  which are the ledger itself. Nothing is hand-entered.</p>
+
+  <h2>Most constructs are used once</h2>
+  <figure>
+    <svg id="figRec" viewBox="0 0 640 260" role="img"
+         aria-label="Constructs by the number of papers using them, log scale"></svg>
+    <figcaption><span class="fn">Figure 1</span><b>Constructs by the number of papers that use them.</b><span class="nt">Note. Counts on a logarithmic scale. A construct is a merged cluster of mentions, so this counts distinct constructs rather than distinct names. The rightmost point is open-ended and holds every construct used in twenty or more papers; it is not joined to the series.</span></figcaption>
+  </figure>
+
+  <h2>The tail grows, the core does not</h2>
+  <div class="fig-row">
+    <figure>
+      <svg id="figNew" viewBox="0 0 320 230" role="img"
+           aria-label="Constructs appearing for the first time, by year"></svg>
+      <figcaption><span class="fn">Figure 2A</span><b>Constructs first appearing, by year.</b><span class="nt">Note. Counts the constructs whose earliest mention falls in that year. The 1990 value is inflated because the corpus starts there and every construct in it is new.</span></figcaption>
+    </figure>
+    <figure>
+      <svg id="figEst" viewBox="0 0 320 230" role="img"
+           aria-label="Share of construct mentions going to established constructs, by year"></svg>
+      <figcaption><span class="fn">Figure 2B</span><b>Share of mentions going to established constructs.</b><span class="nt">Note. Established means used in five or more papers across the whole corpus, so the measure is retrospective and the early years are not penalised for it.</span></figcaption>
+    </figure>
   </div>
+
+  <h2>Where the constructs come from</h2>
+  <figure>
+    <svg id="figJrn" viewBox="0 0 640 210" role="img"
+         aria-label="Construct mentions by journal"></svg>
+    <figcaption><span class="fn">Figure 3</span><b>Construct mentions by journal.</b><span class="nt">Note. Mentions rather than constructs, so a construct used by three journals is counted in each. Coverage runs 1990 to 2025 and reflects what the publisher deposited, not the journal&rsquo;s full output.</span></figcaption>
+  </figure>
 </section>
 
-<section id="p-list" hidden>
-  <p class="note">One construct per line, the way you name it in the paper. Each is checked
-  against the ledger under the qualification rule from Section 4.3: two names are the same
-  construct only when one name&rsquo;s token set contains the other&rsquo;s. Names that merely share a
-  head noun are siblings, not synonyms, and that is where the renaming problem lives.</p>
-  <textarea id="list" placeholder="algorithmic accountability&#10;perceived usefulness&#10;platform governance&#10;task-technology fit"></textarea>
+<section class="panel" id="p-check" hidden>
+  <h2>Check a paper against the ledger</h2>
+  <p class="note">Paste an abstract or a few paragraphs. The page finds construct names
+  that already exist in the ledger, and for each one shows how differently the corpus has
+  defined it. Nothing is uploaded; the matching runs in your browser.</p>
+  <textarea id="paperText" placeholder="Paste an abstract here…"></textarea>
   <div class="row">
-    <button class="go" id="run-list">Check constructs</button>
-    <span class="status" id="st-list"></span>
+    <button class="act" id="checkBtn">Find constructs</button>
+    <button class="act ghost" id="sampleBtn">Use an example</button>
+    <span class="note" style="margin:0" id="checkCount"></span>
   </div>
+  <div id="checkOut"></div>
 </section>
 
-<div id="out"></div>
+<section class="panel" id="p-browse" hidden>
+  <h2>Browse the ledger</h2>
+  <div class="row">
+    <div class="grow"><label class="fld" for="q">Search</label>
+      <input type="search" id="q" placeholder="construct name…"></div>
+    <div><label class="fld" for="sort">Order by</label><select id="sort" style="width:auto">
+      <option value="p">Most papers</option>
+      <option value="m">Most mentions</option>
+      <option value="a">A to Z</option>
+      <option value="l">Most recent first use</option>
+    </select></div>
+    <div><label class="fld" for="minp">Minimum use</label><select id="minp" style="width:auto">
+      <option value="1">Any number of papers</option>
+      <option value="2">2 or more papers</option>
+      <option value="5" selected>5 or more papers</option>
+      <option value="10">10 or more papers</option>
+    </select></div>
+  </div>
+  <div id="listWrap"></div>
+  <div id="detail"></div>
+</section>
 
-<footer>
-  <h3>What the matching does</h3>
-  <p>Names are lowercased, stripped of punctuation and whitespace-collapsed before comparison.
-  A paper-text scan looks for exact occurrences of any canonical name or recorded surface-form
-  variant, up to eight words long. A construct-list check applies three tests in order: exact
-  match on a name or variant; token-set containment either way, which the paper treats as the
-  same construct under a qualifier; and a shared head noun without containment, which the paper
-  treats as a sibling and flags.</p>
-  <h3>What a miss does not mean</h3>
-  <p>The ledger reads abstracts. A construct a paper reasons with but does not name in its
-  abstract is invisible here, so absence from the ledger is weak evidence that a construct is
-  new. Treat a miss as an invitation to make the novelty argument, not as proof of it.</p>
-  <h3>Dissent</h3>
-  <p>Origin and artifact proximity are assigned by majority vote across a construct&rsquo;s mentions,
-  and the disagreement rate is kept. External validation on fifty documented constructs found
-  that unanimous labels are correct 95% of the time and labels carrying dissent at or above 0.20
-  are correct in one case out of six. Rows above that threshold are flagged; read them as
-  unresolved rather than as findings.</p>
-  <h3>Propositions</h3>
-  <p>Where two constructs you entered both resolve to the ledger, the page reports how many
-  distinct papers in the corpus assert a relationship between them. Most pairs are asserted by
-  one paper only, so a pair with no assertion is common and is not by itself an opportunity.</p>
-  <h3>What this page will not do</h3>
-  <p>It will not tell you where a new construct should go. The geometric procedure for finding
-  unoccupied regions of the construct space does not recover compositions the field has already
-  made, and that negative result is reported in Section 5.6 of the paper. Until a relational
-  account of composition replaces the midpoint one, a gap suggestion here would be a confident
-  interface over noise.</p>
-  <p id="cite"></p>
-</footer>
+<section class="panel" id="p-instrument" hidden>
+  <h2>What the instrument does, and where it fails</h2>
+  <p class="note">A ledger built by a language model is only worth as much as its audit.
+  These are the measurements that make the audit possible, including the ones that do not
+  flatter it.</p>
+
+  <div class="tiles" id="tiles2"></div>
+
+  <h2>The merge threshold was measured, not chosen</h2>
+  <div class="fig-row">
+    <figure>
+      <svg id="figCalA" viewBox="0 0 320 230" role="img"
+           aria-label="Share of same-construct pairs retained, by threshold"></svg>
+      <figcaption><span class="fn">Figure 4A</span><b>Same-construct pairs still merged, by threshold.</b><span class="nt">Note. Positives are two wordings the extractor independently gave the same name. Higher is better. Both corpora use 3,000 sampled pairs.</span></figcaption>
+    </figure>
+    <figure>
+      <svg id="figCalB" viewBox="0 0 320 230" role="img"
+           aria-label="False merge rate among random pairs, by threshold"></svg>
+      <figcaption><span class="fn">Figure 4B</span><b>False merges among random pairs, by threshold.</b><span class="nt">Note. Lower is better. The two fields cross one per cent within a hundredth of each other, at 0.83 and 0.84, which is why one threshold serves both. The axis starts at 0.78; below it the rate climbs to about 95 per cent in both fields.</span></figcaption>
+    </figure>
+  </div>
+
+  <h2>How much the threshold matters</h2>
+  <figure>
+    <svg id="figSens" viewBox="0 0 640 185" role="img"
+         aria-label="Constructs and single-mention share at three thresholds"></svg>
+    <figcaption><span class="fn">Figure 5</span><b>Constructs and single-use share at three merge thresholds.</b><span class="nt">Note. Moving the threshold five hundredths moves the construct count by nine per cent, and 93 per cent of that movement is in constructs mentioned once. Statistics resting on the single-use tail should be read with that in mind.</span></figcaption>
+  </figure>
+
+  <h2 id="limits">Where it fails</h2>
+  <div class="warn" id="limitsBox"></div>
+
+  <h2>Cost and reproducibility</h2>
+  <div id="costTable"></div>
+</section>
+
+<p class="foot" id="foot"></p>
 </div>
 
-<script type="module">
-/* pdf.js is fetched on demand, only when someone drops a PDF. Everything else here runs
-   off the three local data files, so a blocked or missing CDN costs the PDF reader and
-   nothing else on the page. */
-const PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs";
-let pdfjs = null;
-async function getPdfjs() {
-  if (pdfjs) return pdfjs;
-  pdfjs = await import(PDFJS_URL);
-  pdfjs.GlobalWorkerOptions.workerSrc =
-    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs";
-  return pdfjs;
+<script>
+/* ------------------------------------------------------------------ data */
+const DATA = ["data/mgmt/", "data/", "./"];
+async function grab(name){
+  let last;
+  for (const base of DATA){
+    try { const r = await fetch(base + name); if (r.ok) return await r.json(); }
+    catch(e){ last = e; }
+  }
+  throw new Error(name + " not found (" + (last||"404") + ")");
+}
+let META=null, IDX=null, FIG=null, SHARDS={}, NAMEMAP=null;
+
+/* measured on the runs described in the technical appendix; not derived here */
+const CAL = {
+  mgmt: [[0.70,100.0,96.97],[0.72,100.0,89.13],[0.74,100.0,70.83],[0.76,100.0,45.27],
+         [0.78,100.0,21.27],[0.80,99.8,6.70],[0.82,98.9,1.80],[0.84,95.5,0.37],
+         [0.86,87.7,0.17],[0.88,72.9,0.07],[0.90,52.9,0],[0.92,33.9,0],[0.94,18.0,0],
+         [0.96,7.9,0],[0.98,2.1,0]],
+  is:   [[0.70,100.0,95.43],[0.72,100.0,85.20],[0.74,100.0,64.10],[0.76,100.0,38.93],
+         [0.78,99.9,18.73],[0.80,99.8,6.53],[0.82,99.0,2.33],[0.84,97.4,0.57],
+         [0.86,92.8,0.10],[0.88,83.3,0.03],[0.90,67.9,0],[0.92,50.3,0],[0.94,32.8,0],
+         [0.96,15.7,0],[0.98,4.5,0]]
+};
+const SENS = [[0.83,23333,79.3],[0.84,23522,79.9],[0.88,25370,84.2]];
+const OVERMERGE = [
+  ["competitive advantage","transient competitive advantage"],
+  ["human capital","firm specific human capital"],
+  ["corporate performance","corporate social performance"],
+  ["decision making","strategic decision making"]
+];
+
+/* ------------------------------------------------------------- svg utils */
+const SVGNS="http://www.w3.org/2000/svg";
+function el(tag, attrs, parent){
+  const n=document.createElementNS(SVGNS,tag);
+  for(const k in attrs) n.setAttribute(k, attrs[k]);
+  if(parent) parent.appendChild(n);
+  return n;
+}
+function txt(parent, x, y, s, cls, anchor){
+  const t=el("text",{x:x,y:y,class:cls||"tk"},parent);
+  if(anchor) t.setAttribute("text-anchor",anchor);
+  t.textContent=s; return t;
+}
+function clear(svg){ while(svg.firstChild) svg.removeChild(svg.firstChild); }
+const fmt = n => n>=1000 ? n.toLocaleString("en-US") : String(n);
+function niceTicks(lo, hi, want){
+  if(hi<=lo) return [lo];
+  const raw=(hi-lo)/Math.max(1,want), mag=Math.pow(10,Math.floor(Math.log10(raw)));
+  const norm=raw/mag;
+  const step=(norm<=1?1:norm<=2?2:norm<=2.5?2.5:norm<=5?5:10)*mag;
+  const out=[]; for(let v=Math.ceil(lo/step)*step; v<=hi+1e-9; v+=step) out.push(+v.toFixed(10));
+  return out;
 }
 
-const $ = s => document.querySelector(s);
-const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g,
-  c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;" }[c]));
-const norm = s => String(s || "").toLowerCase()
-  .replace(/[^a-z0-9\- ]+/g, " ").replace(/\s+/g, " ").trim();
-
-let C = [], E = [], META = null;
-let byForm = new Map();      // normalized name or variant -> construct index
-let byHead = new Map();      // head noun -> [indices]
-let byToken = new Map();     // token -> [indices]
-let edgeOf = new Map();      // "i:j" -> [papers, i->j, j->i]
-let maxN = 1;
-
-async function load() {
-  /* The three data files normally sit in a data/ folder beside this page. Some
-     uploads flatten that, so each file is tried in data/ first and then beside
-     the page, and the layout stops mattering. */
-  async function grab(name) {
-    for (const path of ["data/" + name, "./" + name]) {
-      try {
-        const r = await fetch(path);
-        if (r.ok) return await r.json();
-      } catch (err) { /* try the next location */ }
-    }
-    throw new Error(name + " not found in data/ or beside index.html");
+/* Journal-style line/dot plot: range frame, ticks outside, no gridlines.
+   Returns the scales so a second series can be laid over the same frame. */
+function dotLine(svg, pts, o){
+  o = Object.assign({l:50,r:18,t:16,b:34,log:false,color:"var(--s1)",
+                     yticks:4,pct:false,openLast:false,label:null}, o||{});
+  clear(svg);
+  const vb = svg.getAttribute("viewBox").split(" ").map(Number);
+  const W=vb[2], H=vb[3];
+  const x0=o.l, x1=W-o.r, y0=H-o.b, y1=o.t;
+  const xs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]);
+  const xmin=Math.min(...xs), xmax=Math.max(...xs);
+  let ymin = o.log ? Math.max(1, Math.min(...ys)) : 0;
+  let ymax = Math.max(...ys, ...(o.extra||[]));
+  let ticks;
+  if(o.log){
+    ticks=[];
+    for(let e=Math.floor(Math.log10(ymin)); e<=Math.ceil(Math.log10(ymax)); e++)
+      ticks.push(Math.pow(10,e));
+  } else {
+    ticks = niceTicks(ymin, ymax, o.yticks);
+    ymax = Math.max(ymax, ticks[ticks.length-1]);
   }
-  const [c, e, m] = await Promise.all([
-    grab("constructs.json"), grab("edges.json"), grab("meta.json"),
-  ]);
-  C = c; E = e; META = m;
-  C.forEach((r, i) => {
-    const names = [norm(r.n), ...(r.f || [])];
-    for (const nm of names) {
-      if (!nm) continue;
-      if (!byForm.has(nm)) byForm.set(nm, i);
-      const t = nm.split(" ");
-      maxN = Math.max(maxN, t.length);
-      const h = t[t.length - 1];
-      if (!byHead.has(h)) byHead.set(h, []);
-      if (!byHead.get(h).includes(i)) byHead.get(h).push(i);
-      for (const tok of new Set(t)) {
-        if (tok.length < 4) continue;
-        if (!byToken.has(tok)) byToken.set(tok, []);
-        const a = byToken.get(tok);
-        if (a[a.length - 1] !== i) a.push(i);
-      }
-    }
+  const X = v => x0 + (xmax===xmin?0.5:(v-xmin)/(xmax-xmin))*(x1-x0);
+  const Y = v => o.log
+      ? y0 - (Math.log10(Math.max(v,ymin))-Math.log10(ymin))/(Math.log10(ymax)-Math.log10(ymin))*(y0-y1)
+      : y0 - (v-ymin)/((ymax-ymin)||1)*(y0-y1);
+
+  const vis = ticks.filter(t=>t<=ymax*1.001 && t>=ymin);
+  // range frame: the y spine spans the DATA, not the tick extent (Tufte)
+  const all = ys.concat(o.extraSeries||[]);
+  const dmin = Math.min(...all), dmax = Math.max(...all);
+  el("line",{x1:x0,x2:x0,y1:Y(dmax),y2:Y(dmin),class:"ax"},svg);
+  el("line",{x1:x0,x2:x1,y1:y0,y2:y0,class:"ax"},svg);
+  vis.forEach(t=>{
+    const y=Y(t);
+    el("line",{x1:x0-4,x2:x0,y1:y,y2:y,class:"tkm"},svg);
+    txt(svg,x0-8,y+3.3,o.pct?Math.round(t)+"%":fmt(Math.round(t)),"tk","end");
   });
-  maxN = Math.min(maxN, 8);
-  for (const [i, j, p, f, b] of E) edgeOf.set(i + ":" + j, [p, f, b]);
-  $("#scope").innerHTML =
-    `<b>${m.constructs.toLocaleString()}</b> canonical constructs &middot; ` +
-    `<b>${m.surface_forms.toLocaleString()}</b> names and variants &middot; ` +
-    `<b>${m.documents.toLocaleString()}</b> articles &middot; ` +
-    `${m.journals.join(" ")} &middot; ` +
-    `<b>${m.shared_vocabulary}</b> appear in four or more journals, ` +
-    `<b>${m.single_use.toLocaleString()}</b> appear once`;
-  $("#cite").innerHTML =
-    `Built from the construct ledger described in &ldquo;The Construct Ledger: Building and ` +
-    `Auditing a Machine-Read Map of Information Systems Theory&rdquo;. ` +
-    `Corpus of ${m.documents.toLocaleString()} articles, ${m.pairs.toLocaleString()} ` +
-    `construct pairs connected by at least one asserted relationship.`;
-  $("#run-text").disabled = false; $("#run-list").disabled = false;
+  const step = Math.max(1, Math.round(pts.length/7));
+  pts.forEach((p,i)=>{
+    const last=(i===pts.length-1);
+    if(i%step && !last) return;
+    const x=X(p[0]);
+    el("line",{x1:x,x2:x,y1:y0,y2:y0+4,class:"tkm"},svg);
+    txt(svg,x,y0+15,(o.openLast&&last)?p[0]+"+":(o.xfmt?o.xfmt(p[0]):p[0]),"tk","middle");
+  });
+  plot(svg, pts, X, Y, o.color, o.openLast, o.pct, o.label, o.labelOpts);
+  if(o.xtitle) txt(svg,(x0+x1)/2,H-2,o.xtitle,"al","middle");
+  return {X,Y,x0,x1,y0,y1,W,H};
 }
 
-/* ---------------- tabs ---------------- */
-function tab(which) {
-  const t = which === "text";
-  $("#t-text").setAttribute("aria-selected", t);
-  $("#t-list").setAttribute("aria-selected", !t);
-  $("#p-text").hidden = !t; $("#p-list").hidden = t;
-  $("#out").innerHTML = "";
-}
-$("#t-text").onclick = () => tab("text");
-$("#t-list").onclick = () => tab("list");
-
-/* ---------------- file reading ---------------- */
-$("#drop").onclick = () => $("#file").click();
-["dragenter","dragover"].forEach(ev => $("#drop").addEventListener(ev, e => {
-  e.preventDefault(); $("#drop").classList.add("over");
-}));
-["dragleave","drop"].forEach(ev => $("#drop").addEventListener(ev, e => {
-  e.preventDefault(); $("#drop").classList.remove("over");
-}));
-$("#drop").addEventListener("drop", e => {
-  if (e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]);
-});
-$("#file").onchange = e => { if (e.target.files[0]) readFile(e.target.files[0]); };
-
-async function readFile(f) {
-  const st = $("#st-text");
-  if (f.type === "text/plain") {
-    $("#paper").value = await f.text();
-    st.textContent = `${f.name} loaded`;
-    return;
-  }
-  st.textContent = `reading ${f.name}…`;
-  let lib;
-  try {
-    lib = await getPdfjs();
-  } catch (err) {
-    st.textContent = "the PDF reader could not be loaded; copy the text in instead";
-    return;
-  }
-  try {
-    const buf = await f.arrayBuffer();
-    const doc = await lib.getDocument({ data: buf }).promise;
-    let out = [];
-    for (let p = 1; p <= doc.numPages; p++) {
-      const page = await doc.getPage(p);
-      const tc = await page.getTextContent();
-      out.push(tc.items.map(i => i.str).join(" "));
-      st.textContent = `reading ${f.name}… page ${p} of ${doc.numPages}`;
-    }
-    $("#paper").value = out.join("\n");
-    st.textContent = `${f.name}, ${doc.numPages} pages, ${$("#paper").value.split(/\s+/).length.toLocaleString()} words`;
-  } catch (err) {
-    st.textContent = "could not read that PDF; paste the text instead";
+function plot(svg, pts, X, Y, color, openLast, pct, label, opts){
+  const line = openLast ? pts.slice(0,-1) : pts;
+  el("path",{d:line.map((p,i)=>(i?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1)).join(" "),
+             fill:"none",stroke:color,"stroke-width":1.25,"stroke-linejoin":"round"},svg);
+  pts.forEach(p=>{
+    const c=el("circle",{cx:X(p[0]),cy:Y(p[1]),r:2.6,fill:color},svg);
+    c.appendChild(Object.assign(document.createElementNS(SVGNS,"title"),
+      {textContent:p[0]+": "+(pct?p[1].toFixed(1)+"%":fmt(p[1]))}));
+  });
+  if(label){
+    const at = (opts && opts.at!=null) ? opts.at : pts.length-1;
+    const dx = (opts && opts.dx!=null) ? opts.dx : 7;
+    const dy = (opts && opts.dy!=null) ? opts.dy : 3.5;
+    const anc = (opts && opts.anchor) ? opts.anchor : "start";
+    const q=pts[at];
+    const t=txt(svg,X(q[0])+dx,Y(q[1])+dy,label,"sl",anc);
+    t.setAttribute("fill",color);
   }
 }
 
-/* ---------------- rendering helpers ---------------- */
-function dissentCell(v) {
-  const pos = Math.min(1, v / 0.5) * 46;
-  const hi = v >= 0.20;
-  const flag = hi ? ` <span class="flag">unresolved</span>` : "";
-  return `<td class="num">${v.toFixed(2)}<span class="dot" title="dissent ${v.toFixed(2)}, flagged at 0.20"><i class="${hi ? "hi" : ""}" style="left:${pos.toFixed(1)}px"></i></span>${flag}</td>`;
+/* second series over the frame returned by dotLine */
+function overlay(svg, g, pts, color, label, pct, opts){
+  plot(svg, pts, g.X, g.Y, color, false, pct, label, opts);
 }
-function constructRows(items) {
-  return items.map(({ i, hits, as }) => {
-    const r = C[i];
-    const orig = r.o === "native_is"
-      ? `<span class="tag nat">native IS</span>`
-      : `<span class="tag">${esc(r.od || "borrowed")}</span>`;
-    const prox = r.p === "constitutive"
-      ? `<span class="tag con">constitutive</span>`
-      : `<span class="tag">${esc(r.p || "")}</span>`;
-    const matched = as && norm(as) !== norm(r.n)
-      ? `<div class="cdef">matched your &ldquo;${esc(as)}&rdquo;</div>` : "";
-    return `<tr class="r">
-      <td><div class="cname">${esc(r.n)}</div>
-        ${r.d ? `<div class="cdef">${esc(r.d)}</div>` : ""}${matched}</td>
-      <td class="num">${r.y0 || ""}</td>
-      <td class="num">${r.m}</td>
-      <td class="num">${(r.j || []).length}</td>
-      <td>${orig}</td>${dissentCell(r.ox)}
-      <td>${prox}</td>${dissentCell(r.px)}
-      ${hits != null ? `<td class="num">${hits}</td>` : ""}
-    </tr>`;
+
+/* horizontal dot plot */
+function hDots(svg, rows, o){
+  o=Object.assign({l:212,r:62,t:6,b:22},o||{});
+  clear(svg);
+  const vb=svg.getAttribute("viewBox").split(" ").map(Number);
+  const W=vb[2],H=vb[3];
+  const x0=o.l,x1=W-o.r;
+  const max=Math.max(...rows.map(r=>r[1]));
+  const X=v=>x0+(v/max)*(x1-x0);
+  const dy=(H-o.t-o.b)/rows.length;
+  rows.forEach((r,i)=>{
+    const y=o.t+dy*(i+0.5);
+    el("line",{x1:x0,x2:X(r[1]),y1:y,y2:y,stroke:"var(--rule)","stroke-width":1},svg);
+    el("circle",{cx:X(r[1]),cy:y,r:3.4,fill:"var(--s1)"},svg);
+    txt(svg,x0-9,y+3.6,r[0],"tk","end");
+    txt(svg,X(r[1])+9,y+3.6,fmt(r[1]),"dl","start").setAttribute("fill","var(--ink-2)");
+  });
+  el("line",{x1:x0,x2:x0,y1:o.t+dy*0.5,y2:H-o.b-dy*0.5+dy*0,class:"ax"},svg);
+}
+
+/* ------------------------------------------------------------------ figs */
+function drawFigures(){
+  dotLine(document.getElementById("figRec"), FIG.recurrence_papers,
+    {log:true, l:54, b:40, openLast:true, xtitle:"papers using the construct"});
+
+  const yrs = FIG.by_year.filter(d=>d.y>=1990 && d.y<=2025);
+  dotLine(document.getElementById("figNew"),
+    yrs.map(d=>[d.y,d.first_seen]), {l:48,b:38,xtitle:"year"});
+  dotLine(document.getElementById("figEst"),
+    yrs.map(d=>[d.y, d.mentions? 100*d.established_mentions/d.mentions : 0]),
+    {l:48,b:38,pct:true,xtitle:"year"});
+
+  hDots(document.getElementById("figJrn"),
+    FIG.journals.map(j=>[j[0].replace("Academy of Management","Acad. of Mgmt"),j[1]]));
+
+  const gA = dotLine(document.getElementById("figCalA"),
+    CAL.mgmt.map(r=>[r[0],r[1]]),
+    {pct:true,l:48,b:38,r:84,xfmt:v=>v.toFixed(2),xtitle:"merge threshold",
+     label:"Management", extraSeries:CAL.is.map(r=>r[1]), extra:CAL.is.map(r=>r[1]),
+     labelOpts:{at:11, dx:-8, dy:13, anchor:"end"}});
+  overlay(document.getElementById("figCalA"), gA,
+    CAL.is.map(r=>[r[0],r[1]]), "var(--s2)", "Info. systems", true,
+    {at:11, dx:8, dy:-7, anchor:"start"});
+
+  const near = r => r[0] >= 0.779;
+  const gB = dotLine(document.getElementById("figCalB"),
+    CAL.mgmt.filter(near).map(r=>[r[0],r[2]]),
+    {pct:true,l:48,b:38,r:84,xfmt:v=>v.toFixed(2),xtitle:"merge threshold",
+     label:"Management", extraSeries:CAL.is.filter(near).map(r=>r[2]),
+     extra:CAL.is.filter(near).map(r=>r[2]),
+     labelOpts:{at:1, dx:9, dy:-4, anchor:"start"}});
+  overlay(document.getElementById("figCalB"), gB,
+    CAL.is.filter(near).map(r=>[r[0],r[2]]), "var(--s2)", "Info. systems", true,
+    {at:3, dx:10, dy:15, anchor:"start"});
+
+  // threshold sensitivity: two panels in one frame, labelled A and B
+  const svg=document.getElementById("figSens"); clear(svg);
+  const panels=[["A","constructs",SENS.map(r=>[r[0],r[1]]),false],
+                ["B","share used once",SENS.map(r=>[r[0],r[2]]),true]];
+  panels.forEach((p,pi)=>{
+    const ox=pi*320, x0=ox+72, x1=ox+286, y0=136, y1=44;
+    const vals=p[2].map(v=>v[1]);
+    const lo=Math.min(...vals)-(Math.max(...vals)-Math.min(...vals))*0.35;
+    const hi=Math.max(...vals)+(Math.max(...vals)-Math.min(...vals))*0.35;
+    const X=v=>x0+((v-0.83)/0.05)*(x1-x0);
+    const Y=v=>y0-((v-lo)/((hi-lo)||1))*(y0-y1);
+    txt(svg,ox+30,24,p[0],"pl","start");
+    txt(svg,ox+46,24,p[1],"al","start");
+    el("line",{x1:x0-14,x2:x1+14,y1:y0,y2:y0,class:"ax"},svg);
+    el("path",{d:p[2].map((v,i)=>(i?"L":"M")+X(v[0]).toFixed(1)+" "+Y(v[1]).toFixed(1)).join(" "),
+               fill:"none",stroke:"var(--s1)","stroke-width":1.25},svg);
+    p[2].forEach(v=>{
+      el("circle",{cx:X(v[0]),cy:Y(v[1]),r:3,fill:"var(--s1)"},svg);
+      txt(svg,X(v[0]),Y(v[1])-11,p[3]?v[1].toFixed(1)+"%":fmt(v[1]),"dl","middle")
+        .setAttribute("fill","var(--ink)");
+      el("line",{x1:X(v[0]),x2:X(v[0]),y1:y0,y2:y0+4,class:"tkm"},svg);
+      txt(svg,X(v[0]),y0+15,v[0].toFixed(2),"tk","middle");
+    });
+    txt(svg,(x0+x1)/2,y0+33,"merge threshold","al","middle");
+  });
+}
+
+/* ----------------------------------------------------------------- tiles */
+function tile(v,k){ return '<div class="tile"><div class="v">'+v+'</div><div class="k">'+k+'</div></div>'; }
+function drawTiles(){
+  const m=META;
+  document.getElementById("tiles").innerHTML =
+    tile(fmt(m.documents_extracted), "abstracts with at least one construct, of "+fmt(m.documents_in_corpus)+" usable") +
+    tile(fmt(m.mentions), "construct mentions extracted") +
+    tile(fmt(m.constructs), "distinct constructs after merging at "+m.threshold) +
+    tile(fmt(m.established), "used in "+m.established_threshold+" or more papers");
+  document.getElementById("tiles2").innerHTML =
+    tile((m.grounding_rate*100).toFixed(2)+"%", "of "+fmt(m.spans_checked)+" spans found verbatim in their own abstract") +
+    tile(fmt(m.documents_refused), "abstracts the model refused, every one a non-abstract") +
+    tile("$11.87", "total model cost for the extraction, metered per call") +
+    tile("188 min", "wall clock at eight workers");
+  document.getElementById("corpusLine").textContent =
+    m.label + " · " + m.year_min + "–" + m.year_max + " · " +
+    m.journals.length + " journals · merged at cosine " + m.threshold;
+  document.getElementById("foot").innerHTML =
+    "Built from the ledger files in <code>data/</code>. Spans are shipped with "+m.context_chars+
+    " characters of context and a DOI rather than the full abstract, so the grounding claim can be "+
+    "checked without redistributing the corpus. Code and data: see the repository README.";
+  document.getElementById("limitsBox").innerHTML =
+    "<b>The qualification rule over-merges.</b> A merge requires one name's words to be a "+
+    "superset of the other's, which was built for a field where the modifier individuates "+
+    "the construct. In management the two-word name is often the general construct and the "+
+    "longer name a theorised specialisation of it, so the rule absorbs distinctions that "+
+    "matter: " + OVERMERGE.map(p=>"<em>"+p[1]+"</em> into <em>"+p[0]+"</em>").join(", ") +
+    ". The same shape appears in information systems, where <em>IT innovation</em> is absorbed "+
+    "into <em>innovation</em>, so this is a property of the rule rather than of either field. "+
+    "Every merge is visible in the browser above; none of them are hidden.";
+  document.getElementById("costTable").innerHTML =
+    '<table><thead><tr><th>Step</th><th class="num">Cost</th><th class="num">Time</th>'+
+    '<th>Re-runnable</th></tr></thead><tbody>'+
+    '<tr><td>Corpus assembly from OpenAlex and Crossref</td><td class="num">free</td>'+
+    '<td class="num">41 min</td><td>yes, resumable</td></tr>'+
+    '<tr><td>Construct extraction, '+fmt(m.documents_extracted)+' abstracts</td>'+
+    '<td class="num">$11.87</td><td class="num">188 min</td><td>yes, paid work is never repeated</td></tr>'+
+    '<tr><td>Embedding '+fmt(40945)+' name-and-definition strings</td><td class="num">$0.20</td>'+
+    '<td class="num">15 min</td><td>yes, cached per batch</td></tr>'+
+    '<tr><td>Calibration and merging</td><td class="num">free</td><td class="num">4 min</td>'+
+    '<td>yes, deterministic</td></tr>'+
+    '<tr><td>Grounding verification</td><td class="num">free</td><td class="num">seconds</td>'+
+    '<td>yes, local and mechanical</td></tr>'+
+    '</tbody></table>';
+}
+
+/* ---------------------------------------------------------------- browse */
+function shardFor(i){ return String(Math.floor(i/META.shard_size)).padStart(4,"0"); }
+async function detail(i){
+  const s=shardFor(i);
+  if(!SHARDS[s]) SHARDS[s]=await grab("detail/"+s+".json");
+  return SHARDS[s][String(i)];
+}
+function renderList(){
+  const q=document.getElementById("q").value.trim().toLowerCase();
+  const minp=+document.getElementById("minp").value;
+  const sort=document.getElementById("sort").value;
+  let rows=IDX.filter(r=>r.p>=minp && (!q || r.n.toLowerCase().includes(q)));
+  if(sort==="a") rows.sort((a,b)=>a.n.localeCompare(b.n));
+  else if(sort==="m") rows.sort((a,b)=>b.m-a.m);
+  else if(sort==="l") rows.sort((a,b)=>(b.f||0)-(a.f||0));
+  else rows.sort((a,b)=>b.p-a.p);
+  const n=rows.length; rows=rows.slice(0,200);
+  const h=['<p class="note">'+fmt(n)+' construct'+(n===1?"":"s")+' match'+(n===1?"es":"")+
+           (n>200?", showing the first 200":"")+'.</p>',
+    '<table><thead><tr><th>Construct</th><th class="num">Papers</th><th class="num">Mentions</th>',
+    '<th class="num">Names</th><th class="num">First</th><th class="num">Last</th></tr></thead><tbody>'];
+  for(const r of rows)
+    h.push('<tr data-i="'+r.i+'"><td>'+esc(r.n)+'</td><td class="num">'+r.p+
+           '</td><td class="num">'+r.m+'</td><td class="num">'+(r.sf||1)+
+           '</td><td class="num">'+(r.f||"")+'</td><td class="num">'+(r.l||"")+'</td></tr>');
+  h.push('</tbody></table>');
+  const w=document.getElementById("listWrap");
+  w.innerHTML=h.join("");
+  w.querySelectorAll("tbody tr").forEach(tr=>tr.onclick=()=>showDetail(+tr.dataset.i));
+}
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+async function showDetail(i){
+  const d=await detail(i);
+  const box=document.getElementById("detail");
+  const defs=d.defs.map(x=>'<div class="defn">'+esc(x.d)+
+      '<div class="m">'+esc(x.j||"")+(x.y?" · "+x.y:"")+' · <a href="https://doi.org/'+
+      encodeURIComponent(x.id)+'" target="_blank" rel="noopener">'+esc(x.id)+'</a></div></div>').join("");
+  const prov=d.prov.map(p=>{
+    const pre=esc(p.ctx.slice(0,p.s)), mid=esc(p.ctx.slice(p.s,p.e)), post=esc(p.ctx.slice(p.e));
+    return '<div class="prov">'+pre+'<mark>'+mid+'</mark>'+post+
+      '<div class="m">extracted as “'+esc(p.n)+'” · '+esc(p.j||"")+(p.y?" · "+p.y:"")+
+      ' · <a href="https://doi.org/'+encodeURIComponent(p.id)+'" target="_blank" rel="noopener">'+
+      esc(p.id)+'</a></div></div>';
   }).join("");
+  box.innerHTML='<div class="detail"><h3>'+esc(d.n)+'</h3>'+
+    '<p class="meta">'+d.p+' paper'+(d.p===1?"":"s")+' · '+d.m+
+    ' mention'+(d.m===1?"":"s")+' · '+Object.entries(d.roles).map(([k,v])=>
+      '<span class="pill">'+esc(k||"unlabelled")+' '+v+'</span>').join("")+'</p>'+
+    (d.forms.length>1?'<p class="note" style="margin:0 0 12px">Names merged into this construct: '+
+      d.forms.map(f=>"<em>"+esc(f)+"</em>").join(", ")+'</p>':"")+
+    '<h3 class="sec">How the corpus defines it</h3>'+
+    '<p class="note" style="margin:0 0 6px">Up to five definitions that differ materially from one another.</p>'+
+    defs+
+    '<h3 class="sec">Check the grounding yourself</h3>'+
+    '<p class="note" style="margin:0 0 6px">Each extraction carries a span copied from its abstract. '+
+    'The span is highlighted; follow the DOI to read the source.</p>'+prov+'</div>';
+  box.scrollIntoView({behavior:"smooth",block:"start"});
 }
-function table(items, withHits) {
-  return `<div class="scroll"><table>
-    <thead><tr>
-      <th>Construct in the ledger</th><th>First</th><th>Papers</th><th>Jrnls</th>
-      <th>Origin</th><th>Dissent</th><th>Artifact</th><th>Dissent</th>
-      ${withHits ? "<th>In yours</th>" : ""}
-    </tr></thead><tbody>${constructRows(items)}</tbody></table></div>`;
-}
-function propositions(idxs) {
-  if (idxs.length < 2) return "";
-  const rows = [];
-  for (let a = 0; a < idxs.length; a++) for (let b = a + 1; b < idxs.length; b++) {
-    const i = Math.min(idxs[a], idxs[b]), j = Math.max(idxs[a], idxs[b]);
-    const e = edgeOf.get(i + ":" + j);
-    rows.push({ i, j, p: e ? e[0] : 0 });
+
+/* ----------------------------------------------------------------- check */
+function buildNameMap(){
+  NAMEMAP=new Map();
+  for(const r of IDX){
+    const k=r.k;
+    if(!k) continue;
+    const prev=NAMEMAP.get(k);
+    if(!prev || prev.p<r.p) NAMEMAP.set(k,r);
   }
-  rows.sort((x, y) => y.p - x.p);
-  const shown = rows.filter(r => r.p > 0);
-  const none = rows.length - shown.length;
-  if (!shown.length && !none) return "";
-  return `<h2>Propositions among these constructs <span class="count">${rows.length} pair${rows.length === 1 ? "" : "s"}</span></h2>
-  <p class="note">How many distinct papers in the corpus assert a relationship between each pair.
-  A pair asserted twice or more is as close to a replicated proposition as abstract-level reading
-  can get, and across the corpus very few pairs reach it.</p>
-  ${shown.length ? `<div class="scroll"><table><thead><tr>
-    <th>Pair</th><th>Papers asserting</th><th>Status</th></tr></thead><tbody>
-    ${shown.map(r => `<tr class="r">
-      <td><span class="cname">${esc(C[r.i].n)}</span> &mdash; <span class="cname">${esc(C[r.j].n)}</span></td>
-      <td class="num">${r.p}</td>
-      <td>${r.p >= 2 ? `<span class="tag con">replicated</span>` : `<span class="tag">single paper</span>`}</td>
-    </tr>`).join("")}</tbody></table></div>`
-    : `<p class="empty">No pair among these constructs is asserted by any paper in the corpus.</p>`}
-  ${none && shown.length ? `<p class="note" style="margin-top:10px">${none} of the
-    ${rows.length} pairs are never asserted in the corpus.</p>` : ""}`;
 }
-function downloadBtn(payload, name) {
-  const id = "dl" + Math.random().toString(36).slice(2, 8);
-  setTimeout(() => {
-    const b = document.getElementById(id);
-    if (b) b.onclick = () => {
-      const blob = new Blob([payload], { type: "text/csv" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob); a.download = name; a.click();
-      URL.revokeObjectURL(a.href);
-    };
+const normTxt = s => s.toLowerCase().replace(/[^a-z0-9\s-]/g," ").replace(/\s+/g," ").trim();
+function findConstructs(text, minPapers){
+  const words=normTxt(text).split(" ").filter(Boolean);
+  const hits=[]; const seen=new Map();
+  let i=0;
+  while(i<words.length){
+    let matched=0, rec=null;
+    for(let L=Math.min(6,words.length-i); L>=2; L--){
+      const cand=words.slice(i,i+L).join(" ");
+      const r=NAMEMAP.get(cand);
+      if(r && r.p>=minPapers){ matched=L; rec=r; break; }
+    }
+    if(rec){
+      if(!seen.has(rec.i)){ seen.set(rec.i,{rec:rec,n:0}); }
+      seen.get(rec.i).n++;
+      i+=matched;
+    } else i++;
+  }
+  for(const v of seen.values()) hits.push(v);
+  hits.sort((a,b)=>b.rec.p-a.rec.p);
+  return hits;
+}
+async function runCheck(){
+  const text=document.getElementById("paperText").value;
+  const out=document.getElementById("checkOut");
+  if(!text.trim()){ out.innerHTML='<p class="empty">Nothing pasted yet.</p>'; return; }
+  const hits=findConstructs(text,2);
+  document.getElementById("checkCount").textContent =
+    hits.length? hits.length+" construct"+(hits.length===1?"":"s")+" already in the ledger" : "";
+  if(!hits.length){
+    out.innerHTML='<p class="empty">No construct in this text matches a name used in two or '+
+      'more papers in the corpus. That is worth knowing either way: it can mean the '+
+      'vocabulary is genuinely new, or that it is phrased differently from the corpus.</p>';
+    return;
+  }
+  const parts=['<h2>Constructs this text shares with the corpus</h2>',
+    '<p class="note">Ordered by how widely used each one already is. Click a row to see how '+
+    'the corpus has defined it and to check the grounding.</p>',
+    '<table><thead><tr><th>Construct</th><th class="num">Papers</th><th class="num">Mentions</th>',
+    '<th class="num">In your text</th><th class="num">First seen</th></tr></thead><tbody>'];
+  for(const h of hits)
+    parts.push('<tr data-i="'+h.rec.i+'"><td>'+esc(h.rec.n)+'</td><td class="num">'+h.rec.p+
+      '</td><td class="num">'+h.rec.m+'</td><td class="num">'+h.n+'</td><td class="num">'+
+      (h.rec.f||"")+'</td></tr>');
+  parts.push('</tbody></table>');
+  const est=hits.filter(h=>h.rec.p>=5).length;
+  parts.push('<p class="note" style="margin-top:14px">'+est+' of these '+hits.length+
+    ' are established, meaning five or more papers use them. A construct the corpus already '+
+    'defines in several incompatible ways is one to define explicitly rather than assume.</p>');
+  out.innerHTML=parts.join("");
+  out.querySelectorAll("tbody tr").forEach(tr=>tr.onclick=()=>{
+    showTab("browse"); showDetail(+tr.dataset.i);
   });
-  return `<div class="row"><button class="ghost" id="${id}">Download results as CSV</button></div>`;
 }
-function csv(items) {
-  const head = ["your_name","ledger_construct","verdict","definition","first_year","papers",
-    "journals","origin","origin_discipline","origin_dissent","proximity","proximity_dissent"];
-  const lines = [head.join(",")];
-  for (const it of items) {
-    const r = it.i != null ? C[it.i] : null;
-    const cell = v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
-    lines.push([it.as || "", r ? r.n : "", it.verdict || "", r ? r.d : "", r ? r.y0 : "",
-      r ? r.m : "", r ? (r.j || []).join(" ") : "", r ? r.o : "", r ? r.od : "",
-      r ? r.ox : "", r ? r.p : "", r ? r.px : ""].map(cell).join(","));
-  }
-  return lines.join("\n");
+const SAMPLE = "We argue that absorptive capacity conditions the relationship between "+
+  "environmental dynamism and firm performance. Drawing on the resource based view, we "+
+  "propose that organizational slack and top management team heterogeneity jointly shape "+
+  "the exploration exploitation balance, and that competitive advantage is sustained only "+
+  "where knowledge transfer across business units is routinised. We test these ideas on a "+
+  "panel of manufacturing firms.";
+
+/* ------------------------------------------------------------------ tabs */
+function showTab(p){
+  document.querySelectorAll("#tabs button").forEach(b=>
+    b.setAttribute("aria-selected", String(b.dataset.p===p)));
+  ["overview","check","browse","instrument"].forEach(k=>
+    document.getElementById("p-"+k).hidden = (k!==p));
+  window.scrollTo({top:0,behavior:"smooth"});
 }
 
-/* ---------------- mode 1: scan paper text ---------------- */
-$("#run-text").onclick = () => {
-  const raw = $("#paper").value;
-  if (!raw.trim()) { $("#st-text").textContent = "nothing to scan"; return; }
-  const words = norm(raw).split(" ");
-  const hits = new Map();
-  for (let i = 0; i < words.length; ) {
-    let step = 1;
-    for (let n = Math.min(maxN, words.length - i); n >= 1; n--) {
-      const g = words.slice(i, i + n).join(" ");
-      const k = byForm.get(g);
-      if (k !== undefined) { hits.set(k, (hits.get(k) || 0) + 1); step = n; break; }
-    }
-    i += step;
+/* ------------------------------------------------------------------ init */
+(async function(){
+  document.getElementById("themeBtn").onclick=()=>{
+    const cur=document.documentElement.getAttribute("data-theme");
+    const next = cur==="dark" ? "light" : cur==="light" ? "dark"
+      : (matchMedia("(prefers-color-scheme: dark)").matches ? "light":"dark");
+    document.documentElement.setAttribute("data-theme",next);
+    drawFigures();
+  };
+  document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>showTab(b.dataset.p));
+  try{
+    [META, IDX, FIG] = await Promise.all([grab("meta.json"), grab("constructs.json"), grab("figures.json")]);
+  }catch(e){
+    document.getElementById("corpusLine").textContent = "could not load the ledger: "+e.message;
+    return;
   }
-  const items = [...hits.entries()].map(([i, h]) => ({ i, hits: h, verdict: "mentioned" }))
-    .sort((a, b) => b.hits - a.hits || C[a.i].n.localeCompare(C[b.i].n));
-  const shared = items.filter(x => (C[x.i].j || []).length >= 4).length;
-  const once = items.filter(x => C[x.i].m === 1).length;
-  $("#st-text").textContent = `${words.length.toLocaleString()} words scanned`;
-  $("#out").innerHTML = items.length ? `
-    <h2>Constructs your paper shares with the ledger <span class="count">${items.length}</span></h2>
-    <p class="note">${shared} of these are part of the field&rsquo;s shared vocabulary, appearing in four
-    or more of the seven journals. ${once} appear in exactly one paper in the corpus, which means
-    the ledger has seen the name but the field has not reused it.</p>
-    ${table(items, true)}
-    ${downloadBtn(csv(items), "overlap-text.csv")}
-    ${propositions(items.slice(0, 40).map(x => x.i))}`
-    : `<h2>No ledger constructs found</h2><p class="empty">The scan matched none of the
-       20,709 names and variants. For a short abstract that is normal; try the construct list
-       instead, which also reports siblings and near-misses.</p>`;
-  $("#out").scrollIntoView({ behavior: "smooth", block: "start" });
-};
-
-/* ---------------- mode 2: check a construct list ---------------- */
-$("#run-list").onclick = () => {
-  const lines = $("#list").value.split("\n").map(s => s.split("::")[0].trim()).filter(Boolean);
-  if (!lines.length) { $("#st-list").textContent = "nothing to check"; return; }
-  const exact = [], qual = [], spec = [], sib = [], miss = [];
-  for (const line of lines) {
-    const q = norm(line);
-    if (!q) continue;
-    const direct = byForm.get(q);
-    if (direct !== undefined) { exact.push({ i: direct, as: line, verdict: "already in the ledger" }); continue; }
-    const qt = new Set(q.split(" "));
-    const head = q.split(" ").pop();
-    let general = null, specific = null, sibs = [];
-    for (const i of (byHead.get(head) || [])) {
-      for (const nm of [norm(C[i].n), ...(C[i].f || [])]) {
-        if (nm.split(" ").pop() !== head) continue;
-        const nt = new Set(nm.split(" "));
-        const nSubQ = [...nt].every(t => qt.has(t));   // ledger name inside yours: yours is the specification
-        const qSubN = [...qt].every(t => nt.has(t));   // yours inside ledger name: yours is the parent
-        if (nSubQ && general == null) general = i;
-        else if (qSubN && specific == null) specific = i;
-        else if (!nSubQ && !qSubN && !sibs.includes(i)) sibs.push(i);
-      }
-    }
-    if (specific != null) {
-      qual.push({ i: specific, as: line, verdict: "the ledger holds a qualified form of your construct" });
-      continue;
-    }
-    if (general != null) {
-      spec.push({ i: general, as: line, verdict: "your name qualifies an existing construct" });
-      continue;
-    }
-    if (sibs.length) {
-      sibs.sort((a, b) => C[b].m - C[a].m);
-      sib.push({ as: line, cands: sibs.slice(0, 6), verdict: "shares a head noun, not a synonym" });
-      continue;
-    }
-    const toks = [...qt].filter(t => t.length >= 4);
-    const score = new Map();
-    for (const t of toks) for (const i of (byToken.get(t) || []))
-      score.set(i, (score.get(i) || 0) + 1);
-    const near = [...score.entries()].filter(([, s]) => s >= 1)
-      .sort((a, b) => b[1] - a[1] || C[b[0]].m - C[a[0]].m).slice(0, 5).map(([i]) => i);
-    miss.push({ as: line, cands: near, verdict: "not in the ledger" });
-  }
-  const resolved = [...exact, ...qual];
-  $("#st-list").textContent = `${lines.length} checked`;
-  let html = "";
-  if (resolved.length) html += `
-    <h2>Already in the ledger <span class="count">${resolved.length} of ${lines.length}</span></h2>
-    <p class="note">Exact name or variant matches, plus names the qualification rule treats as the
-    same construct because one name&rsquo;s tokens contain the other&rsquo;s.</p>
-    ${table(resolved, false)}`;
-  if (spec.length) html += `
-    <h2>Your name qualifies an existing construct <span class="count">${spec.length}</span></h2>
-    <p class="note">The ledger already holds the unqualified construct, and your name adds a
-    modifier to it. Under the qualification rule these count as the same construct, so a reader
-    may treat your contribution as a specification rather than a new concept. That is a defensible
-    move, and it is also how a good part of the field&rsquo;s tail of 12,535 single-use constructs was
-    made, so the modifier has to be doing theoretical work you can state.</p>
-    ${table(spec, false)}`;
-  if (sib.length) html += `
-    <h2>Shares a head noun with an existing construct <span class="count">${sib.length}</span></h2>
-    <p class="note">These are the ones to look at. The construct below is not the same as yours,
-    because neither name qualifies the other, but it occupies the same family and a reader will
-    ask you to say how your construct differs. In the corpus this pattern is what made embedding
-    similarity merge the two constructs of the technology acceptance model.</p>
-    ${sib.map(s => `<div class="panel"><dl class="verdict">
-      <dt>your name</dt><dd><span class="cname">${esc(s.as)}</span></dd>
-      <dt>siblings</dt><dd>${s.cands.map(i =>
-        `<div style="margin-bottom:7px"><span class="cname">${esc(C[i].n)}</span>
-         <span class="tag" style="margin-left:6px">${C[i].m} paper${C[i].m === 1 ? "" : "s"}</span>
-         ${C[i].d ? `<div class="cdef">${esc(C[i].d)}</div>` : ""}</div>`).join("")}</dd>
-    </dl></div>`).join("")}`;
-  if (miss.length) html += `
-    <h2>Not in the ledger <span class="count">${miss.length}</span></h2>
-    <p class="note">No name or variant matched and no construct shares the head noun. Remember
-    that the ledger reads abstracts, so this is weak evidence of novelty. The nearest constructs
-    by shared vocabulary are listed so you can state the difference rather than assert it.</p>
-    ${miss.map(s => `<div class="panel"><dl class="verdict">
-      <dt>your name</dt><dd><span class="cname">${esc(s.as)}</span></dd>
-      <dt>nearest</dt><dd>${s.cands.length
-        ? s.cands.map(i => `<span class="cname">${esc(C[i].n)}</span>`).join(", ")
-        : `<span class="empty">nothing with a shared discriminating word</span>`}</dd>
-    </dl></div>`).join("")}`;
-  html += downloadBtn(csv([...resolved, ...spec,
-    ...sib.map(s => ({ as: s.as, verdict: s.verdict })),
-    ...miss.map(s => ({ as: s.as, verdict: s.verdict }))]), "overlap-constructs.csv");
-  html += propositions([...resolved, ...spec].map(x => x.i));
-  $("#out").innerHTML = html;
-  $("#out").scrollIntoView({ behavior: "smooth", block: "start" });
-};
-
-$("#run-text").disabled = true; $("#run-list").disabled = true;
-load().catch(e => { $("#scope").textContent = "could not load the ledger data: " + e.message; });
+  buildNameMap();
+  drawTiles(); drawFigures();
+  document.getElementById("q").placeholder="one of "+fmt(META.constructs)+" construct names…";
+  ["q","sort","minp"].forEach(id=>{
+    const n=document.getElementById(id);
+    n.addEventListener(id==="q"?"input":"change",renderList);
+  });
+  renderList();
+  document.getElementById("checkBtn").onclick=runCheck;
+  document.getElementById("sampleBtn").onclick=()=>{
+    document.getElementById("paperText").value=SAMPLE; runCheck();
+  };
+  addEventListener("resize",()=>drawFigures());
+})();
 </script>
 </body>
 </html>

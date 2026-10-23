@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""iscledger-mgmt: put a jsonl extraction ledger into the sqlite shape iscgeo reads.
+
+Why this exists rather than a second canonicaliser: `iscgeo` is the file that
+produced every canonicalisation number in Paper A, and it reads the per-mention
+ledger out of sqlite tables that `iscx` wrote. The management extractor
+(`iscx-mgmt`) writes jsonl instead. Converting the jsonl into those same two
+tables means the management corpus goes through byte-identical canonicalisation
+code, so a difference between the two fields cannot be a difference between two
+implementations.
+
+It also maps the management schema onto the field names iscgeo expects:
+
+    structural_role  ->  role
+
+`origin` and `artifact_proximity` are absent by design: the management
+extraction never asked for them. iscgeo's majority vote returns None for both
+with a dissent of 0, which is the honest reading of a field that was never
+coded, and the compositional-origin analysis for management, if it is wanted,
+needs its own extraction pass.
+
+Reads only. No API calls, no cost.
+
+Usage
+-----
+    python iscledger-mgmt --ledger ledger_mgmt_v2.jsonl --db mgmt_ledger.sqlite
+    python iscledger-mgmt --ledger ledger_mgmt_v2.jsonl --db mgmt_ledger.sqlite --selftest
+"""
+import argparse, datetime, json, os, sqlite3, sys, tempfile
+
+TOOL_VERSION = "1.0.0"
+
+DDL = """
+CREATE TABLE IF NOT EXISTS runs (
+  run_id TEXT PRIMARY KEY, started_utc TEXT, tool TEXT, note TEXT);
+CREATE TABLE IF NOT EXISTS results (
+  run_id TEXT, doc_id TEXT, json TEXT, PRIMARY KEY (run_id, doc_id));
+"""
+
+ROLE_FROM = "structural_role"
+
+
+def log(s):
+    print(s, file=sys.stderr)
+
+
+def convert(ledger, dbpath, run_id=None, prompt_version=None):
+    rows = []
+    versions = set()
+    skipped_no_constructs = 0
+    with open(ledger, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            r = json.loads(line)
+            v = r.get("prompt_version")
+            if prompt_version and v != prompt_version:
+                continue
+            versions.add(v)
+            cs = (r.get("result") or {}).get("constructs") or []
+            if not cs:
+                skipped_no_constructs += 1
+                continue
+            out = []
+            for c in cs:
+                d = dict(c)
+                if ROLE_FROM in d and "role" not in d:
+                    d["role"] = d.get(ROLE_FROM)
+                out.append(d)
+            rows.append((r["doc_id"], json.dumps({"constructs": out}, ensure_ascii=False)))
+
+    if len(versions) > 1 and not prompt_version:
+        raise SystemExit(
+            "fatal: the ledger holds %d prompt versions (%s).\n"
+            "       Canonicalising across versions would mix extraction runs. Re-run with\n"
+            "       --prompt-version to pick one." % (len(versions), ", ".join(sorted(map(str, versions)))))
+
+    seen = {}
+    dupes = 0
+    for doc_id, js in rows:
+        if doc_id in seen:
+            dupes += 1
+        seen[doc_id] = js
+    if dupes:
+        log("  warning: %d duplicate doc_id(s); kept the last row for each" % dupes)
+
+    rid = run_id or ("mgmt-" + (versions and sorted(map(str, versions))[0] or "run").replace("/", "-"))
+    d = os.path.dirname(os.path.abspath(dbpath))
+    if d and not os.path.isdir(d):
+        os.makedirs(d, exist_ok=True)
+    db = sqlite3.connect(dbpath)
+    db.executescript(DDL)
+    db.execute("DELETE FROM results WHERE run_id=?", (rid,))
+    db.execute("DELETE FROM runs WHERE run_id=?", (rid,))
+    db.execute("INSERT INTO runs VALUES (?,?,?,?)",
+               (rid, datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+                "iscledger-mgmt " + TOOL_VERSION, os.path.basename(ledger)))
+    db.executemany("INSERT INTO results VALUES (?,?,?)",
+                   [(rid, k, v) for k, v in seen.items()])
+    db.commit()
+    n_c = sum(len(json.loads(v)["constructs"]) for v in seen.values())
+    roles = {}
+    for v in seen.values():
+        for c in json.loads(v)["constructs"]:
+            roles[c.get("role")] = roles.get(c.get("role"), 0) + 1
+    db.close()
+    return {"run_id": rid, "documents": len(seen), "mentions": n_c,
+            "versions": sorted(map(str, versions)), "roles": roles,
+            "skipped_no_constructs": skipped_no_constructs}
+
+
+def selftest():
+    log("iscledger-mgmt selftest (no network, no cost)\n")
+    tmp = tempfile.mkdtemp()
+    led = os.path.join(tmp, "l.jsonl")
+    with open(led, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"doc_id": "A", "prompt_version": "p1", "result": {"constructs": [
+            {"name": "absorptive capacity", "definition": "d1", "structural_role": "moderator",
+             "provenance_span": "s1"}]}}) + "\n")
+        f.write(json.dumps({"doc_id": "B", "prompt_version": "p1", "result": {"constructs": []}}) + "\n")
+        f.write(json.dumps({"doc_id": "A", "prompt_version": "p1", "result": {"constructs": [
+            {"name": "absorptive capacity", "definition": "d2", "structural_role": "focal"}]}}) + "\n")
+    db = os.path.join(tmp, "x.sqlite")
+    r = convert(led, db)
+    assert r["documents"] == 1, r
+    assert r["mentions"] == 1, r
+    log("  ok    empty-construct rows are skipped")
+    log("  ok    duplicate doc_id keeps one row")
+    con = sqlite3.connect(db)
+    rid = con.execute("SELECT run_id FROM runs ORDER BY started_utc DESC LIMIT 1").fetchone()[0]
+    assert rid == r["run_id"]
+    log("  ok    iscgeo's run lookup finds the run")
+    js = con.execute("SELECT json FROM results WHERE run_id=?", (rid,)).fetchone()[0]
+    c = json.loads(js)["constructs"][0]
+    assert c["role"] == "focal", c
+    assert c["name"] == "absorptive capacity"
+    log("  ok    structural_role is readable as role")
+    assert c.get("provenance_span") is None or "provenance_span" in c
+    con.close()
+
+    with open(led, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"doc_id": "C", "prompt_version": "p2", "result": {"constructs": [
+            {"name": "x y", "definition": "d", "structural_role": "focal"}]}}) + "\n")
+    try:
+        convert(led, os.path.join(tmp, "y.sqlite"))
+        raise AssertionError("mixed prompt versions should stop the run")
+    except SystemExit:
+        log("  ok    mixed prompt versions refuse to canonicalise together")
+    r = convert(led, os.path.join(tmp, "z.sqlite"), prompt_version="p2")
+    assert r["documents"] == 1 and r["mentions"] == 1
+    log("  ok    --prompt-version selects one run")
+    log("\nall checks passed.")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="iscledger-mgmt")
+    ap.add_argument("--ledger")
+    ap.add_argument("--db")
+    ap.add_argument("--run-id", default=None)
+    ap.add_argument("--prompt-version", default=None)
+    ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--version", action="version", version="iscledger-mgmt " + TOOL_VERSION)
+    a = ap.parse_args()
+    if a.selftest:
+        selftest()
+        return
+    if not a.ledger or not a.db:
+        ap.error("--ledger and --db are required")
+    r = convert(a.ledger, a.db, a.run_id, a.prompt_version)
+    log("iscledger-mgmt")
+    log("  ledger                %s" % a.ledger)
+    log("  prompt version(s)     %s" % ", ".join(r["versions"]))
+    log("  run_id                %s" % r["run_id"])
+    log("  documents             %d" % r["documents"])
+    log("  construct mentions    %d" % r["mentions"])
+    log("  rows with none        %d  (not written; already in the failure log)"
+        % r["skipped_no_constructs"])
+    log("  structural roles      %s" % r["roles"])
+    log("  database              %s" % a.db)
+    log("")
+    log("  Next: iscgeo embed --ledger %s --corpus <clean corpus> --out <emb.sqlite>" % a.db)
+
+
+if __name__ == "__main__":
+    main()

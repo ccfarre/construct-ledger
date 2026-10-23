@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""isclean-mgmt: strip publisher boilerplate from a collected corpus.
+
+Writes a NEW file and never touches the input, so every later number can be
+traced back to the exact corpus it came from.
+
+What it removes, and only at the edges of the text where it is safe:
+  * a leading "Abstract" label
+  * Wiley's "Research Summary" and "Managerial Summary" section headings
+  * trailing copyright and rights notices
+
+What it does not do: touch the body of an abstract, or drop records. Records
+that fall under the word floor after cleaning are flagged in the report and
+marked keep=false rather than deleted, so you can see what the cleaning cost.
+
+Standard library only. No network, no API, no cost.
+"""
+import argparse, collections, json, os, re, sys
+
+LEAD = [
+    (re.compile(r"^\s*abstract[:.\s\u2014-]*", re.I), "leading 'Abstract' label"),
+    (re.compile(r"^\s*(research|managerial|practitioner|executive)\s+summary[:.\s\u2014-]*", re.I),
+     "leading summary heading"),
+]
+INLINE = [
+    (re.compile(r"\s*\b(managerial|practitioner|executive)\s+summary\b[:.\s\u2014-]*", re.I),
+     "inline summary heading"),
+]
+
+# Trailing notices run to the end of the abstract and often contain URLs, so each
+# rule matches from its marker to the end of the string. Matching only as far as
+# the next full stop truncated an Organization Science abstract in the middle of
+# a word, because the full stops were inside a licence URL.
+TRAIL = [
+    (re.compile(r"\s*copyright\s*(\u00a9|\(c\))?\s*\d{4}.*$", re.I | re.S), "copyright notice"),
+    (re.compile(r"\s*(\u00a9|\(c\))\s*\d{4}\s+by\s+.*$", re.I | re.S), "copyright by notice"),
+    (re.compile(r"\s*(\u00a9|\(c\))\s*\d{4}\s+(john wiley|wiley|informs|elsevier|sage|"
+                r"the author|blackwell|academy of management).*$", re.I | re.S), "publisher notice"),
+    (re.compile(r"\s*\(psycinfo database record.*$", re.I | re.S), "PsycINFO trailer"),
+    (re.compile(r"\s*(this is an open access article|this article is published under|"
+                r"used under a creative commons|published under the terms of the creative commons)"
+                r".*$", re.I | re.S), "open access licence notice"),
+    (re.compile(r"\s*all rights reserved\.?\s*$", re.I), "rights reserved"),
+    (re.compile(r"\s*(this article is protected by copyright|reprinted with permission).*$", re.I | re.S),
+     "permission notice"),
+    (re.compile(r"\s*copyright of the\b.*$", re.I | re.S), "publisher holding notice"),
+    (re.compile(r"\s*(however,?\s*)?users may print,? download,? or email articles.*$", re.I | re.S),
+     "platform use notice"),
+    (re.compile(r"\s*[^.]{0,80}express written permission.*$", re.I | re.S), "permission boilerplate"),
+]
+WS = re.compile(r"\s+")
+
+# Some records are not abstracts at all. Two ASQ records in the first management
+# pull were JSTOR page headers: title, author, citation and licence text, about
+# 200 words of metadata. There is no abstract to recover from those, so they are
+# marked keep=false with a reason rather than cleaned into something plausible.
+NOT_AN_ABSTRACT = [
+    (re.compile(r"your use of the jstor archive", re.I), "JSTOR page header, not an abstract"),
+    (re.compile(r"stable url:\s*https?://", re.I), "citation header, not an abstract"),
+    (re.compile(r"(mon|tue|wed|thu|fri|sat|sun)\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4}", re.I),
+     "retrieval timestamp, not an abstract"),
+]
+
+# Worth a human glance rather than a rule: things that are usually fine but
+# occasionally mark a record that is not prose.
+SUSPICIOUS = [
+    (re.compile(r"[\w.\u2014-]+@[\w.-]+\.\w+"), "contains an email address"),
+    (re.compile(r"terms and conditions", re.I), "contains licence language"),
+    (re.compile(r"\bjstor\b", re.I), "mentions JSTOR"),
+]
+
+MAX_TRAIL_FRACTION = 0.25   # a trailing rule may never eat a quarter of the abstract
+TRAIL_WINDOW = 300          # and may only start this far from the end
+
+
+def _safe_trail(text, rx):
+    """Apply a trailing rule only when it starts at a word boundary, begins near
+    the end of the text, and does not remove too much. Returns the new text or
+    None if the rule was refused."""
+    m = rx.search(text)
+    if not m:
+        return None
+    start = m.start()
+    # the patterns begin with \s*, so the match often starts ON the whitespace.
+    # A cut is safe when it lands on whitespace, directly after whitespace, or on
+    # an opening bracket or copyright sign. Anything else would split a word.
+    if start > 0 and not (text[start].isspace()
+                          or text[start - 1].isspace()
+                          or text[start] in "(\u00a9"):
+        return None
+    if len(text) - start > TRAIL_WINDOW:
+        return None                              # not actually a trailing notice
+    if (len(text) - start) / max(1, len(text)) > MAX_TRAIL_FRACTION:
+        return None                              # would take too much of the abstract
+    return text[:start].rstrip()
+
+
+def clean(text):
+    """Return (cleaned, [names of rules that fired], [names refused as unsafe])."""
+    fired, refused = [], []
+    t = text or ""
+    for _ in range(3):                       # labels stack: "Abstract Research Summary"
+        before = t
+        for rx, name in LEAD:
+            new = rx.sub("", t, count=1)
+            if new != t:
+                t = new
+                if name not in fired:
+                    fired.append(name)
+        if t == before:
+            break
+    for rx, name in INLINE:
+        new = rx.sub(" ", t)
+        if new != t:
+            t = new
+            if name not in fired:
+                fired.append(name)
+    for _ in range(3):
+        before = t
+        for rx, name in TRAIL:
+            if not rx.search(t):
+                continue
+            new = _safe_trail(t, rx)
+            if new is None:
+                if name not in refused:
+                    refused.append(name)
+                continue
+            t = new
+            if name not in fired:
+                fired.append(name)
+        if t == before:
+            break
+    return WS.sub(" ", t).strip(), fired, refused
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--corpus", required=True, help="corpus jsonl from iscorpus-mgmt")
+    ap.add_argument("--out", required=True, help="new corpus jsonl to write; refuses to overwrite")
+    ap.add_argument("--min-words", type=int, default=40,
+                    help="word floor re-applied after cleaning (default 40)")
+    ap.add_argument("--report", default="", help="optional csv listing every record changed")
+    ap.add_argument("--force", action="store_true", help="allow writing over an existing --out")
+    a = ap.parse_args()
+
+    if os.path.exists(a.out) and not a.force:
+        print("refusing to overwrite %s; choose another name or pass --force" % a.out)
+        sys.exit(2)
+
+    rows = [json.loads(l) for l in open(a.corpus, encoding="utf-8") if l.strip()]
+    print("read %d records from %s" % (len(rows), a.corpus))
+
+    fired_count = collections.Counter()
+    refused_count = collections.Counter()
+    rejected = []
+    suspicious = []
+    by_journal = collections.Counter()
+    words_removed = 0
+    changed = []
+    now_short = 0
+
+    for r in rows:
+        original = r.get("abstract", "")
+        why = next((name for rx, name in NOT_AN_ABSTRACT if rx.search(original)), None)
+        if why:
+            r["keep"] = False
+            r["drop_reason"] = why
+            rejected.append((r["doc_id"], r.get("journal", ""), r.get("year", ""), why))
+            continue
+        cleaned, fired, refused = clean(original)
+        for rf in refused:
+            refused_count[rf] += 1
+        if fired and cleaned != original:
+            for f in fired:
+                fired_count[f] += 1
+            by_journal[r.get("journal", "?")] += 1
+            words_removed += len(original.split()) - len(cleaned.split())
+            changed.append((r["doc_id"], r.get("journal", ""), r.get("year", ""),
+                            "; ".join(fired), len(original.split()), len(cleaned.split())))
+            r["abstract"] = cleaned
+            r["n_words_abstract"] = len(cleaned.split())
+            r["cleaned"] = fired
+        for rx, note in SUSPICIOUS:
+            if rx.search(r["abstract"]):
+                suspicious.append((r["doc_id"], r.get("journal", ""), r.get("year", ""), note))
+                break
+        if r["n_words_abstract"] < a.min_words:
+            r["keep"] = False
+            r["drop_reason"] = "under %d words after cleaning" % a.min_words
+            now_short += 1
+
+    with open(a.out, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    print("\nRULES FIRED")
+    for k, v in fired_count.most_common():
+        print("  %-28s %6d records" % (k, v))
+    if refused_count:
+        print("\nRULES REFUSED AS UNSAFE  (would have cut inside a word, started too\n"
+              "far from the end, or removed more than a quarter of the abstract)")
+        for k, v in refused_count.most_common():
+            print("  %-28s %6d records" % (k, v))
+    print("\nRECORDS CHANGED, BY JOURNAL")
+    for k, v in by_journal.most_common():
+        print("  %-40s %6d of %d" % (k[:40], v,
+              sum(1 for r in rows if r.get("journal") == k)))
+    if rejected:
+        print("\nREJECTED AS NOT AN ABSTRACT  (marked keep=false, left in the file)")
+        for d, j, y, why in rejected:
+            print("  %-26s %s  %s" % (j[:26], y, why))
+    if suspicious:
+        print("\nWORTH A GLANCE  %d record(s); see the report for the list" % len(suspicious))
+    print("\n  records changed:      %6d of %d" % (len(changed), len(rows)))
+    print("  words removed:        %6d  (%.1f per changed record)"
+          % (words_removed, words_removed / max(1, len(changed))))
+    print("  marked keep=false:    %6d  (under %d words after cleaning)" % (now_short, a.min_words))
+    print("\nwrote %s" % a.out)
+
+    if a.report:
+        import csv
+        with open(a.report, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["doc_id", "journal", "year", "rules", "words_before", "words_after"])
+            w.writerows(changed)
+            for d, j, y, why in rejected:
+                w.writerow([d, j, y, "REJECTED: " + why, "", ""])
+            for d, j, y, note in suspicious:
+                w.writerow([d, j, y, "GLANCE: " + note, "", ""])
+        print("wrote %s" % a.report)
+
+
+if __name__ == "__main__":
+    main()

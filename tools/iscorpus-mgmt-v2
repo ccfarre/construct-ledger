@@ -1,0 +1,636 @@
+#!/usr/bin/env python3
+"""iscorpus-mgmt: build a management-journal abstract corpus the same way the IS
+corpus was built.
+
+Standard library only. No pip install, no compiled third-party packages, no API
+key, and no paid service of any kind. OpenAlex and Crossref are both free and
+unauthenticated, so no run of this tool can spend money.
+
+Four commands, meant to be run in this order:
+
+  resolve   Ask Crossref which journals match the titles you give it and write
+            journals.json. You check that file by eye before going further. This
+            exists because OpenAlex source records can be conflated: in the IS
+            corpus, the JAIS source carried 48,278 works because it had absorbed
+            the AIS electronic library, and a perfect name match hid it.
+
+  probe     Sample a few hundred records per journal per period and report how
+            many carry a usable abstract. Cheap, quick, and the gate that decides
+            whether a journal is worth pulling. In the IS corpus this is what
+            disqualified JSIS, where only 6.8% of records had abstracts.
+
+  pull      Harvest in full, with resume, deduplication by DOI, and an itemised
+            attrition ledger in which every dropped record carries a reason.
+
+  verify    Re-check journal membership against Crossref publisher deposits at
+            the ISSN level and report any conflation.
+
+  selftest  Exercise the parsing, filtering and resume logic offline.
+
+Example:
+
+  python iscorpus-mgmt resolve --mailto you@example.org \\
+      --title "Academy of Management Review" --title "Academy of Management Journal" \\
+      --title "Administrative Science Quarterly" --title "Strategic Management Journal" \\
+      --title "Organization Science" --title "Management Science" --out .
+
+  python iscorpus-mgmt probe --mailto you@example.org --journals journals.json --out .
+  python iscorpus-mgmt pull  --mailto you@example.org --journals journals.json --out .
+"""
+
+import argparse
+import csv
+import json
+import os
+import platform
+import random
+import re
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+OPENALEX = "https://api.openalex.org"
+# OpenAlex made API keys mandatory on 13 February 2026 and retired the polite pool.
+# A free account gives 100,000 credits a day; a list query costs 10 credits, so a
+# full six-journal pull is a few thousand credits and stays inside the free tier.
+# Get a key at https://openalex.org/settings/api
+CREDITS_PER_LIST = 10
+FREE_DAILY_CREDITS = 100000
+CROSSREF = "https://api.crossref.org"
+UA = "iscorpus-mgmt/1.0 (research corpus builder; mailto:%s)"
+
+YEAR_MIN, YEAR_MAX = 1990, 2025
+ABS_MIN_WORDS, ABS_MAX_WORDS = 40, 600
+
+PARATEXT = re.compile(
+    r"^\s*(editorial|erratum|corrigendum|correction|retraction|book review|"
+    r"introduction to the special issue|in memoriam|call for papers|"
+    r"from the editors?|comments? on|reply to|rejoinder|front matter|back matter)\b",
+    re.I)
+
+
+# --------------------------------------------------------------------------- io
+
+def log(msg):
+    sys.stdout.write(msg + "\n")
+    sys.stdout.flush()
+
+
+CREDITS = {"spent": 0}
+
+
+def banner(cmd, key=None):
+    log("=" * 72)
+    log("iscorpus-mgmt %s" % cmd)
+    log("OpenAlex and Crossref only. No paid service, cost of this run in money: 0.00")
+    if key is not None:
+        log("OpenAlex key: %s (free tier, %s credits/day, a list query costs %d)"
+            % ("set" if key else "MISSING", "{:,}".format(FREE_DAILY_CREDITS), CREDITS_PER_LIST))
+    log("=" * 72)
+
+
+def spend(n=CREDITS_PER_LIST):
+    CREDITS["spent"] += n
+    if CREDITS["spent"] and CREDITS["spent"] % (FREE_DAILY_CREDITS // 10) == 0:
+        log("    [credits used this run: %s of the %s free daily allowance]"
+            % ("{:,}".format(CREDITS["spent"]), "{:,}".format(FREE_DAILY_CREDITS)))
+
+
+def get_key(a):
+    """Prefer the environment variable. A key typed into a file inside a synced
+    folder ends up in Dropbox and in any archive built from that folder."""
+    key = getattr(a, "api_key", None) or os.environ.get("OPENALEX_API_KEY", "")
+    if not key:
+        log("")
+        log("No OpenAlex API key. Since 13 February 2026 OpenAlex requires one:")
+        log("  without a key you get 100 credits a day, enough for about ten list queries.")
+        log("  with a free account you get 100,000 a day, which is more than this tool needs.")
+        log("")
+        log("  1. make a free account at https://openalex.org")
+        log("  2. copy the key from https://openalex.org/settings/api")
+        log("  3. set it for this terminal session, so it is not written into any file:")
+        log("")
+        log("       $env:OPENALEX_API_KEY = \"your-key\"          (PowerShell)")
+        log("")
+        log("  Do not put the key in a file inside the Dropbox folder. It would sync,")
+        log("  and it would travel inside any replication archive built from that folder.")
+        log("")
+        sys.exit(2)
+    return key
+
+
+def warn_about_sleep():
+    """A full pull takes hours. If the machine sleeps, it stops."""
+    if platform.system() != "Windows":
+        return
+    try:
+        out = subprocess.run(
+            ["powercfg", "/q", "SCHEME_CURRENT", "SUB_SLEEP", "STANDBYIDLE"],
+            capture_output=True, text=True, timeout=15).stdout
+        vals = re.findall(r"Current AC Power Setting Index:\s*0x([0-9a-fA-F]+)", out)
+        if vals and int(vals[0], 16) != 0:
+            mins = int(vals[0], 16) // 60
+            log("")
+            log("  NOTE: this machine is set to sleep after %d minutes on mains power." % mins)
+            log("  A full pull runs for hours and stops when the machine sleeps. The run")
+            log("  resumes cleanly, but you will have to start it again. Consider")
+            log("  changing the sleep setting, or keep the session in the foreground.")
+            log("")
+    except Exception:
+        pass  # a missing or restricted powercfg is not a reason to stop
+
+
+def http_json(url, mailto, tries=5):
+    """GET with polite headers and backoff. Returns parsed JSON or raises."""
+    req = urllib.request.Request(url, headers={
+        "User-Agent": UA % mailto,
+        "Accept": "application/json",
+    })
+    delay = 2.0
+    for attempt in range(1, tries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403, 409):
+                log("")
+                log("  OpenAlex returned HTTP %d. That is the API key requirement introduced" % e.code)
+                log("  on 13 February 2026, not a problem with this corpus or these journals.")
+                log("  Without a key the allowance is 100 credits a day and a list query costs 10.")
+                log("")
+                log("  Get a free key at https://openalex.org/settings/api, then:")
+                log("     $env:OPENALEX_API_KEY = \"your-key\"")
+                log("  and run the same command again. Progress so far is saved and will resume.")
+                log("")
+                sys.exit(3)
+            if e.code in (429, 500, 502, 503, 504) and attempt < tries:
+                log("    http %d, waiting %.0fs (attempt %d/%d)" % (e.code, delay, attempt, tries))
+                time.sleep(delay)
+                delay = min(delay * 2, 60)
+                continue
+            raise
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+            if attempt < tries:
+                log("    %s, waiting %.0fs (attempt %d/%d)" % (type(e).__name__, delay, attempt, tries))
+                time.sleep(delay)
+                delay = min(delay * 2, 60)
+                continue
+            raise
+    raise RuntimeError("unreachable")
+
+
+# ------------------------------------------------------------------- abstracts
+
+def inverted_to_text(inv):
+    """OpenAlex stores abstracts as {word: [positions]}. Put them back in order."""
+    if not isinstance(inv, dict) or not inv:
+        return ""
+    slots = {}
+    for word, positions in inv.items():
+        if not isinstance(positions, list):
+            continue
+        for p in positions:
+            if isinstance(p, int) and p >= 0:
+                slots[p] = word
+    if not slots:
+        return ""
+    return " ".join(slots[i] for i in sorted(slots))
+
+
+JATS = re.compile(r"<[^>]+>")
+
+
+def crossref_abstract(raw):
+    """Crossref abstracts are JATS XML. Strip tags and the leading 'Abstract' label."""
+    if not raw:
+        return ""
+    txt = JATS.sub(" ", raw)
+    txt = re.sub(r"\s+", " ", txt).strip()
+    return re.sub(r"^abstract[:\s]*", "", txt, flags=re.I).strip()
+
+
+def n_words(s):
+    return len(s.split())
+
+
+# --------------------------------------------------------------------- resolve
+
+def cmd_resolve(a):
+    banner("resolve")
+    out = []
+    for title in a.title:
+        log("\nCrossref journals matching %r" % title)
+        url = "%s/journals?query=%s&rows=5&mailto=%s" % (
+            CROSSREF, urllib.parse.quote(title), urllib.parse.quote(a.mailto))
+        try:
+            items = http_json(url, a.mailto)["message"]["items"]
+        except Exception as e:
+            log("  lookup failed: %s" % e)
+            continue
+        if not items:
+            log("  no match")
+            continue
+        for k, it in enumerate(items):
+            issns = [s for s in (it.get("ISSN") or []) if s]
+            mark = "->" if k == 0 else "  "
+            log("  %s %-52s %-28s %s" % (
+                mark, (it.get("title") or "")[:52], (it.get("publisher") or "")[:28],
+                ", ".join(issns)))
+        best = items[0]
+        out.append({
+            "asked": title,
+            "title": best.get("title"),
+            "publisher": best.get("publisher"),
+            "issn": [s for s in (best.get("ISSN") or []) if s],
+            "confirmed": False,
+        })
+    path = os.path.join(a.out, "journals.json")
+    os.makedirs(a.out, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=1, ensure_ascii=False)
+    log("\nwrote %s" % path)
+    log("")
+    log("Read that file before going on. The arrow marks the top match, which is a")
+    log("guess. Check the publisher and the ISSNs against the journal's own site,")
+    log("delete anything wrong, then set \"confirmed\": true on the ones you accept.")
+    log("probe and pull ignore entries that are not confirmed.")
+
+
+def load_journals(path):
+    with open(path, encoding="utf-8") as f:
+        js = json.load(f)
+    ok = [j for j in js if j.get("confirmed") and j.get("issn")]
+    if not ok:
+        log("No confirmed journals in %s." % path)
+        log("Set \"confirmed\": true on the entries you have checked, then run again.")
+        sys.exit(2)
+    return ok
+
+
+# ----------------------------------------------------------------------- probe
+
+def openalex_page(issn, mailto, cursor="*", per_page=200, year_from=YEAR_MIN, year_to=YEAR_MAX,
+                  api_key=""):
+    filt = ",".join([
+        "primary_location.source.issn:%s" % issn,
+        "type:article",
+        "from_publication_date:%d-01-01" % year_from,
+        "to_publication_date:%d-12-31" % year_to,
+    ])
+    url = "%s/works?filter=%s&per-page=%d&cursor=%s&mailto=%s" % (
+        OPENALEX, urllib.parse.quote(filt, safe=":,"), per_page,
+        urllib.parse.quote(cursor), urllib.parse.quote(mailto))
+    if api_key:
+        url += "&api_key=" + urllib.parse.quote(api_key)
+    spend()
+    return http_json(url, mailto)
+
+
+def cmd_probe(a):
+    key = get_key(a)
+    banner("probe", key)
+    js = load_journals(a.journals)
+    rows = []
+    for j in js:
+        issn = j["issn"][0]
+        log("\n%s  (ISSN %s)" % (j["title"], issn))
+        periods = [(y, min(y + 4, YEAR_MAX)) for y in range(YEAR_MIN, YEAR_MAX + 1, 5)]
+        jtotal = jabs = 0
+        for lo, hi in periods:
+            try:
+                page = openalex_page(issn, a.mailto, per_page=a.sample,
+                                     year_from=lo, year_to=hi, api_key=key)
+            except Exception as e:
+                log("  %d-%d  lookup failed: %s" % (lo, hi, e))
+                continue
+            total = page.get("meta", {}).get("count", 0)
+            results = page.get("results", [])
+            got = 0
+            lens = []
+            for w in results:
+                t = inverted_to_text(w.get("abstract_inverted_index"))
+                if n_words(t) >= ABS_MIN_WORDS:
+                    got += 1
+                    lens.append(n_words(t))
+            pct = (100.0 * got / len(results)) if results else 0.0
+            mean = (sum(lens) / len(lens)) if lens else 0
+            jtotal += total
+            jabs += got
+            log("  %d-%d  %6d records   abstract in %4.1f%% of %d sampled   mean %3d words"
+                % (lo, hi, total, pct, len(results), mean))
+            rows.append({"journal": j["title"], "issn": issn, "from": lo, "to": hi,
+                         "records": total, "sampled": len(results), "with_abstract": got,
+                         "pct_with_abstract": round(pct, 1), "mean_words": round(mean)})
+            time.sleep(a.pause)
+        log("  total records 1990-2025: %d" % jtotal)
+    os.makedirs(a.out, exist_ok=True)
+    path = os.path.join(a.out, "probe.csv")
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()) if rows else ["journal"])
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+    log("\nwrote %s" % path)
+    log("")
+    log("Read the abstract percentages before pulling. In the IS corpus a journal")
+    log("at 6.8% was dropped as unusable; the retained seven ran from 74.5% in the")
+    log("earliest period to 91.9% in the most recent. A journal that is low only in")
+    log("the early years is usable with a later start date; one that is low")
+    log("throughout is not usable at all.")
+
+
+# ------------------------------------------------------------------------ pull
+
+def classify(work, issn_set):
+    """Return (record, None) to keep, or (None, reason) to drop."""
+    doi = (work.get("doi") or "").replace("https://doi.org/", "").strip().lower()
+    if not doi:
+        return None, "no DOI for membership verification"
+
+    src = ((work.get("primary_location") or {}).get("source") or {})
+    got = {s for s in (src.get("issn") or []) if s}
+    if got and not (got & issn_set):
+        return None, "source ISSN does not match the confirmed journal"
+
+    year = work.get("publication_year")
+    if not isinstance(year, int) or not (YEAR_MIN <= year <= YEAR_MAX):
+        return None, "publication year outside 1990-2025"
+
+    title = (work.get("title") or work.get("display_name") or "").strip()
+    if not title:
+        return None, "no title"
+    if PARATEXT.search(title):
+        return None, "editorial, erratum or other paratext"
+
+    abstract = inverted_to_text(work.get("abstract_inverted_index"))
+    nw = n_words(abstract)
+    if nw == 0:
+        return None, "no abstract"
+    if nw < ABS_MIN_WORDS:
+        return None, "abstract shorter than %d words" % ABS_MIN_WORDS
+    if nw > ABS_MAX_WORDS:
+        return None, "abstract longer than %d words" % ABS_MAX_WORDS
+
+    return {
+        "doc_id": doi,
+        "doi": doi,
+        "openalex_id": work.get("id"),
+        "journal": src.get("display_name"),
+        "issn": sorted(got),
+        "year": year,
+        "title": title,
+        "abstract": abstract,
+        "n_words_abstract": nw,
+        "type": work.get("type"),
+        "keep": True,
+    }, None
+
+
+def cmd_pull(a):
+    key = get_key(a)
+    banner("pull", key)
+    warn_about_sleep()
+    js = load_journals(a.journals)
+    os.makedirs(a.out, exist_ok=True)
+    corpus_path = os.path.join(a.out, "corpus_mgmt.jsonl")
+    state_path = os.path.join(a.out, "corpus_mgmt.state.json")
+    attr_path = os.path.join(a.out, "corpus_mgmt.attrition.csv")
+
+    state = {"cursors": {}, "done": [], "seen": []}
+    if os.path.exists(state_path):
+        with open(state_path, encoding="utf-8") as f:
+            state = json.load(f)
+        log("resuming: %d journals already finished, %d records already written"
+            % (len(state["done"]), len(state["seen"])))
+    seen = set(state["seen"])
+
+    attrition = {}
+    if os.path.exists(attr_path):
+        with open(attr_path, encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                attrition[row["reason"]] = int(row["records"])
+
+    out = open(corpus_path, "a", encoding="utf-8")
+
+    def save():
+        state["seen"] = sorted(seen)
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        with open(attr_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["reason", "records"])
+            for k in sorted(attrition, key=lambda x: -attrition[x]):
+                w.writerow([k, attrition[k]])
+
+    try:
+        for j in js:
+            issn_primary = j["issn"][0]
+            if issn_primary in state["done"]:
+                log("\n%s: already complete, skipping" % j["title"])
+                continue
+            issn_set = set(j["issn"])
+            cursor = state["cursors"].get(issn_primary, "*")
+            log("\n%s  (ISSN %s)%s" % (j["title"], issn_primary,
+                                       "  resuming" if cursor != "*" else ""))
+            kept = 0
+            scanned = 0
+            while cursor:
+                page = openalex_page(issn_primary, a.mailto, cursor=cursor,
+                                     per_page=200, api_key=key)
+                results = page.get("results", [])
+                total = page.get("meta", {}).get("count", 0)
+                if not results:
+                    break
+                for w in results:
+                    scanned += 1
+                    rec, reason = classify(w, issn_set)
+                    if reason:
+                        attrition[reason] = attrition.get(reason, 0) + 1
+                        continue
+                    if rec["doc_id"] in seen:
+                        attrition["duplicate DOI"] = attrition.get("duplicate DOI", 0) + 1
+                        continue
+                    seen.add(rec["doc_id"])
+                    out.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                    kept += 1
+                cursor = page.get("meta", {}).get("next_cursor")
+                state["cursors"][issn_primary] = cursor or ""
+                out.flush()
+                save()
+                log("  scanned %6d of %6d   kept %6d" % (scanned, total, kept))
+                time.sleep(a.pause)
+            state["done"].append(issn_primary)
+            save()
+            log("  finished: %d kept from %d scanned" % (kept, scanned))
+    except KeyboardInterrupt:
+        log("\ninterrupted. Progress is saved; run the same command again to resume.")
+    finally:
+        out.close()
+        save()
+
+    manifest = {
+        "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "tool": "iscorpus-mgmt/1.0",
+        "journals": [{"title": j["title"], "issn": j["issn"]} for j in js],
+        "year_range": [YEAR_MIN, YEAR_MAX],
+        "abstract_words": [ABS_MIN_WORDS, ABS_MAX_WORDS],
+        "records_retained": len(seen),
+        "attrition": attrition,
+    }
+    mpath = os.path.join(a.out, "corpus_mgmt.manifest.json")
+    with open(mpath, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=1, ensure_ascii=False)
+    log("\nretained %d records" % len(seen))
+    log("OpenAlex credits used this run: %s of the %s free daily allowance"
+        % ("{:,}".format(CREDITS["spent"]), "{:,}".format(FREE_DAILY_CREDITS)))
+    log("wrote %s" % corpus_path)
+    log("wrote %s" % attr_path)
+    log("wrote %s" % mpath)
+
+
+# ---------------------------------------------------------------------- verify
+
+def cmd_verify(a):
+    key = get_key(a)
+    banner("verify", key)
+    js = load_journals(a.journals)
+    log("\nComparing what OpenAlex attributes to each journal against what the")
+    log("publisher actually deposited with Crossref, at the ISSN level.\n")
+    for j in js:
+        issn = j["issn"][0]
+        try:
+            oa = openalex_page(issn, a.mailto, per_page=1, api_key=key)["meta"]["count"]
+        except Exception as e:
+            log("  %-46s OpenAlex lookup failed: %s" % (j["title"][:46], e))
+            continue
+        url = ("%s/journals/%s/works?filter=type:journal-article,"
+               "from-pub-date:%d-01-01,until-pub-date:%d-12-31&rows=0&mailto=%s"
+               % (CROSSREF, issn, YEAR_MIN, YEAR_MAX, urllib.parse.quote(a.mailto)))
+        try:
+            cr = http_json(url, a.mailto)["message"]["total-results"]
+        except Exception as e:
+            log("  %-46s Crossref lookup failed: %s" % (j["title"][:46], e))
+            continue
+        ratio = (oa / cr) if cr else float("inf")
+        flag = ""
+        if cr and (ratio > 1.25 or ratio < 0.75):
+            flag = "   <-- check this"
+        log("  %-46s OpenAlex %7d   Crossref %7d   ratio %5.2f%s"
+            % (j["title"][:46], oa, cr, ratio, flag))
+    log("\nA ratio far above 1 is the conflation signature: OpenAlex is attributing")
+    log("works to a source that the publisher never deposited under that ISSN. In")
+    log("the IS corpus one source carried 26,261 records of which 839 were real.")
+
+
+# -------------------------------------------------------------------- selftest
+
+def cmd_selftest(a):
+    banner("selftest")
+    fails = []
+
+    def check(name, got, want):
+        if got == want:
+            log("  ok    %s" % name)
+        else:
+            log("  FAIL  %s: got %r, wanted %r" % (name, got, want))
+            fails.append(name)
+
+    inv = {"Firms": [0], "that": [1], "invest": [2], "in": [3], "IT": [4]}
+    check("inverted index rebuilds in order", inverted_to_text(inv),
+          "Firms that invest in IT")
+    check("empty inverted index", inverted_to_text(None), "")
+    check("jats stripped", crossref_abstract("<jats:p>Abstract: Hello  world</jats:p>"),
+          "Hello world")
+
+    issn = {"0001-4273"}
+    base = {
+        "doi": "https://doi.org/10.5465/amr.2026.1", "publication_year": 2020,
+        "title": "A theory of something", "type": "article",
+        "primary_location": {"source": {"issn": ["0001-4273"], "display_name": "AMR"}},
+        "abstract_inverted_index": {w: [i] for i, w in enumerate(["w%d" % k for k in range(80)])},
+    }
+    rec, reason = classify(dict(base), issn)
+    check("a good record is kept", reason, None)
+    check("doi is normalised", rec["doc_id"], "10.5465/amr.2026.1")
+    check("abstract word count", rec["n_words_abstract"], 80)
+
+    short = dict(base, abstract_inverted_index={"one": [0], "two": [1]})
+    check("short abstract dropped", classify(short, issn)[1],
+          "abstract shorter than 40 words")
+    longer = dict(base, abstract_inverted_index={"w%d" % k: [k] for k in range(700)})
+    check("long abstract dropped", classify(longer, issn)[1],
+          "abstract longer than 600 words")
+    check("paratext dropped", classify(dict(base, title="Erratum: a theory"), issn)[1],
+          "editorial, erratum or other paratext")
+    check("reply dropped", classify(dict(base, title="Reply to Smith"), issn)[1],
+          "editorial, erratum or other paratext")
+    check("no doi dropped", classify(dict(base, doi=""), issn)[1],
+          "no DOI for membership verification")
+    check("old year dropped", classify(dict(base, publication_year=1975), issn)[1],
+          "publication year outside 1990-2025")
+    wrong = dict(base, primary_location={"source": {"issn": ["9999-9999"]}})
+    check("wrong ISSN dropped", classify(wrong, issn)[1],
+          "source ISSN does not match the confirmed journal")
+    check("missing abstract dropped", classify(dict(base, abstract_inverted_index=None), issn)[1],
+          "no abstract")
+
+    log("")
+    if fails:
+        log("%d check(s) failed." % len(fails))
+        sys.exit(1)
+    log("all checks passed; the parsing and filtering logic is behaving.")
+
+
+# ------------------------------------------------------------------------ main
+
+def main():
+    p = argparse.ArgumentParser(
+        prog="iscorpus-mgmt",
+        description="Build a management-journal abstract corpus. Free data sources only.")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    def common(q, mailto=True, key=False):
+        if key:
+            q.add_argument("--api-key", default="",
+                           help="OpenAlex API key. Better: set OPENALEX_API_KEY in the "
+                                "terminal session so the key is not written into a file.")
+        if mailto:
+            q.add_argument("--mailto", required=True,
+                           help="your email, sent to OpenAlex and Crossref so they put you "
+                                "in the polite request pool. Not sent anywhere else.")
+        q.add_argument("--out", default=".", help="output directory (default: here)")
+        q.add_argument("--pause", type=float, default=0.3,
+                       help="seconds between requests (default: 0.3)")
+
+    q = sub.add_parser("resolve", help="look journals up in Crossref and write journals.json")
+    common(q)
+    q.add_argument("--title", action="append", required=True,
+                   help="journal title, repeat the flag for each journal")
+
+    q = sub.add_parser("probe", help="report abstract coverage before pulling anything")
+    common(q, key=True)
+    q.add_argument("--journals", default="journals.json")
+    q.add_argument("--sample", type=int, default=200,
+                   help="records sampled per journal per period (default: 200)")
+
+    q = sub.add_parser("pull", help="harvest in full, with resume")
+    common(q, key=True)
+    q.add_argument("--journals", default="journals.json")
+
+    q = sub.add_parser("verify", help="check OpenAlex attribution against Crossref deposits")
+    common(q, key=True)
+    q.add_argument("--journals", default="journals.json")
+
+    q = sub.add_parser("selftest", help="run the offline checks")
+    common(q, mailto=False)
+
+    a = p.parse_args()
+    {"resolve": cmd_resolve, "probe": cmd_probe, "pull": cmd_pull,
+     "verify": cmd_verify, "selftest": cmd_selftest}[a.cmd](a)
+
+
+if __name__ == "__main__":
+    main()

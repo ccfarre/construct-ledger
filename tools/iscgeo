@@ -1,0 +1,839 @@
+#!/usr/bin/env python3
+"""
+iscgeo - canonicalisation and construct-space geometry for the CCA/ISR pipeline.
+
+Takes the per-mention extraction ledger produced by `iscx` and turns it into a
+canonical construct ledger with one row per CONSTRUCT (not per mention), then
+computes the geometric quantities H1-H4 are measured on.
+
+Why canonicalisation is not optional: exact-name matching over the full IS corpus
+leaves 86% of construct names as singletons -- "user satisfaction with MDS" and
+"user satisfaction" are separate rows. Without semantic merging the construct
+space is mostly one-off phrasing, and every downstream geometry is noise.
+
+Why coding is assigned HERE and not per mention: `origin` and
+`artifact_proximity` are properties of a construct, not of the study that used
+it. Assigning them once per canonical construct by majority vote across its
+mentions is both more stable than any single mention and produces a dissent rate
+that is itself the reliability statistic Study 1 reports.
+
+Subcommands
+-----------
+  embed     Embed construct name+definition (Gemini), cached, resumable
+  compact   Rewrite the embedding store as float32 blobs (small, loads in seconds)
+  calibrate Measure where same/different constructs separate; suggest a threshold
+  canon     Merge mentions into canonical constructs; majority-vote coding
+  interp    Interpolation index: NNLS residual against the prior-year construct set
+  profile   Summarise a canonical ledger (cohorts, composition, coverage)
+
+Dependencies: numpy (canon/interp only). scipy is used for NNLS when present and
+falls back to a projected-gradient solver otherwise. `embed` is stdlib-only.
+"""
+
+import argparse
+import collections
+import hashlib
+import json
+import os
+import re
+import sqlite3
+import sys
+import time
+import urllib.error
+import urllib.request
+
+TOOL_VERSION = "1.0.0"
+GEMINI = "https://generativelanguage.googleapis.com/v1beta"
+DEFAULT_EMBED_MODEL = "gemini-embedding-001"
+
+
+def norm(s):
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+
+
+def env_key(*names):
+    for n in names:
+        v = os.environ.get(n)
+        if v:
+            return v.strip().strip('"').strip("'").strip("<").strip(">").strip()
+    return None
+
+
+class ApiError(Exception):
+    def __init__(self, status, body, url):
+        self.status, self.body, self.url = status, body, url
+        Exception.__init__(self, "HTTP %s: %s" % (status, (body or "")[:400]))
+
+
+def _post(url, headers, payload, timeout=120):
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
+                                 headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            pass
+        raise ApiError(e.code, detail, url)
+
+
+# --------------------------------------------------------------------------
+# reading the extraction ledger
+# --------------------------------------------------------------------------
+
+def load_mentions(ledger, run_id=None, corpus=None):
+    """Return one record per construct mention, joined to its document's metadata."""
+    db = sqlite3.connect(ledger)
+    if not run_id:
+        row = db.execute("SELECT run_id FROM runs ORDER BY started_utc DESC "
+                         "LIMIT 1").fetchone()
+        if not row:
+            raise SystemExit("fatal: no runs in %s" % ledger)
+        run_id = row[0]
+    meta = {}
+    if corpus:
+        with open(corpus, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    r = json.loads(line)
+                    if r.get("keep"):
+                        meta[r["doc_id"]] = r
+    out = []
+    for doc_id, js in db.execute("SELECT doc_id, json FROM results WHERE run_id=?",
+                                 (run_id,)):
+        m = meta.get(doc_id, {})
+        for c in (json.loads(js).get("constructs") or []):
+            out.append({
+                "doc_id": doc_id, "key": norm(c.get("name")),
+                "name": c.get("name"), "definition": c.get("definition"),
+                "role": c.get("role"), "origin": c.get("origin"),
+                "origin_discipline": c.get("origin_discipline"),
+                "proximity": c.get("artifact_proximity"),
+                "year": m.get("year"), "journal": m.get("journal"),
+                "cited_by_count": m.get("cited_by_count"),
+            })
+    return run_id, out
+
+
+def surface_forms(mentions):
+    """Distinct name+definition strings to embed, keyed by a stable hash."""
+    forms = {}
+    for m in mentions:
+        text = "%s: %s" % (m["name"] or "", m["definition"] or "")
+        h = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+        m["form"] = h
+        forms.setdefault(h, text)
+    return forms
+
+
+# --------------------------------------------------------------------------
+# embed
+# --------------------------------------------------------------------------
+
+EMB_DDL = """
+CREATE TABLE IF NOT EXISTS emb (
+  form TEXT PRIMARY KEY, text TEXT, model TEXT, dim INT, vec TEXT, ts_utc TEXT);
+CREATE TABLE IF NOT EXISTS emb_runs (
+  ts_utc TEXT, model TEXT, n INT, tool_version TEXT);
+"""
+
+
+def emb_connect(path):
+    d = os.path.dirname(os.path.abspath(path))
+    if d and not os.path.isdir(d):
+        os.makedirs(d, exist_ok=True)
+    db = sqlite3.connect(path, timeout=60)
+    db.executescript(EMB_DDL)
+    return db
+
+
+def batch_embed(model, texts, key, timeout, task="SEMANTIC_SIMILARITY"):
+    payload = {"requests": [{"model": "models/%s" % model,
+                             "content": {"parts": [{"text": t}]},
+                             "taskType": task} for t in texts]}
+    r = _post("%s/models/%s:batchEmbedContents" % (GEMINI, model),
+              {"x-goog-api-key": key, "content-type": "application/json"},
+              payload, timeout)
+    return [e.get("values") for e in (r.get("embeddings") or [])]
+
+
+def cmd_embed(args):
+    key = env_key("GEMINI_API_KEY", "GOOGLE_API_KEY")
+    if not key and args.provider != "mock":
+        raise SystemExit("fatal: GEMINI_API_KEY not set")
+    run_id, mentions = load_mentions(args.ledger, args.run_id, args.corpus)
+    forms = surface_forms(mentions)
+    db = emb_connect(args.out)
+    have = {r[0] for r in db.execute("SELECT form FROM emb WHERE model=?", (args.model,))}
+    todo = [(h, t) for h, t in forms.items() if h not in have]
+    print("surface forms %d   already embedded %d   to do %d"
+          % (len(forms), len(have), len(todo)), file=sys.stderr)
+    if not todo:
+        print("nothing to embed")
+        return 0
+
+    t0 = time.time()
+    done = 0
+    for i in range(0, len(todo), args.batch):
+        chunk = todo[i:i + args.batch]
+        if args.provider == "mock":
+            import random
+            vecs = []
+            for h, t in chunk:
+                rnd = random.Random(int(h, 16))
+                vecs.append([rnd.gauss(0, 1) for _ in range(8)])
+        else:
+            for attempt in range(6):
+                try:
+                    vecs = batch_embed(args.model, [t for _, t in chunk], key,
+                                       args.timeout)
+                    break
+                except ApiError as e:
+                    if e.status in (429, 500, 502, 503, 504) and attempt < 5:
+                        wait = min(2.0 ** (attempt + 1), 30.0)
+                        print("  rate limited, waiting %.0fs" % wait, file=sys.stderr)
+                        time.sleep(wait)
+                        continue
+                    print("\nHTTP %s\n%s" % (e.status, (e.body or "")[:1500]),
+                          file=sys.stderr)
+                    if e.status == 404:
+                        print("\nThat embedding model is not available to this key.\n"
+                              "Run:  iscx models --provider gemini --all\n"
+                              "and pass a model whose methods include embedContent.",
+                              file=sys.stderr)
+                    raise SystemExit(1)
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        for (h, t), v in zip(chunk, vecs):
+            if v:
+                db.execute("INSERT OR REPLACE INTO emb VALUES (?,?,?,?,?,?)",
+                           (h, t, args.model, len(v), json.dumps(v), ts))
+        db.commit()
+        done += len(chunk)
+        el = time.time() - t0
+        print("  %d/%d  %.0f forms/s  eta %.0f min"
+              % (done, len(todo), done / max(el, 1e-9),
+                 (len(todo) - done) / max(done / max(el, 1e-9), 1e-9) / 60),
+              file=sys.stderr)
+        time.sleep(args.sleep)
+
+    db.execute("INSERT INTO emb_runs VALUES (?,?,?,?)",
+               (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), args.model,
+                len(todo), TOOL_VERSION))
+    db.commit()
+    print("embedded %d forms -> %s" % (len(todo), args.out))
+    return 0
+
+
+VEC_DDL = """
+CREATE TABLE IF NOT EXISTS vec (
+  form TEXT PRIMARY KEY, model TEXT, dim INT, v BLOB);
+"""
+
+
+def has_blobs(db):
+    return bool(db.execute("SELECT name FROM sqlite_master WHERE type='table' "
+                           "AND name='vec'").fetchone())
+
+
+def load_vectors(path, model, dims=0):
+    """Load and L2-normalise.
+
+    Prefers the compact float32 BLOB table when present. The original store keeps
+    vectors as JSON text, which for 29k x 3072 is 1.26 GB and minutes of parsing
+    on every invocation -- run `iscgeo compact` once and every later command
+    loads in seconds.
+
+    `dims` truncates first: gemini-embedding-001 is a Matryoshka model, so the
+    leading dimensions carry most of the signal.
+    """
+    import numpy as np
+    db = sqlite3.connect(path)
+    keys, rows = [], []
+    if has_blobs(db):
+        for form, dim, blob in db.execute(
+                "SELECT form, dim, v FROM vec WHERE model=?", (model,)):
+            a = np.frombuffer(blob, dtype="float32")
+            keys.append(form)
+            rows.append(a[:dims] if dims and dims < len(a) else a)
+        if rows:
+            V = np.vstack(rows).astype("float32")
+    if not rows:
+        for form, vec in db.execute("SELECT form, vec FROM emb WHERE model=?", (model,)):
+            v = json.loads(vec)
+            keys.append(form)
+            rows.append(v[:dims] if dims else v)
+        if not rows:
+            raise SystemExit("fatal: no embeddings for model %r in %s" % (model, path))
+        V = np.asarray(rows, dtype="float32")
+    V = V / (np.linalg.norm(V, axis=1, keepdims=True) + 1e-9)
+    return keys, V
+
+
+def cmd_compact(args):
+    """Rewrite a JSON embedding store as float32 blobs, into a NEW file.
+
+    Writes to a new path on purpose: the source may be open for reading by
+    another command, and an in-place rewrite of a 1.26 GB store is exactly the
+    kind of thing that should not be done twice.
+    """
+    import numpy as np
+    src = sqlite3.connect(args.emb)
+    dst = sqlite3.connect(args.out)
+    dst.executescript(EMB_DDL)
+    dst.executescript(VEC_DDL)
+    n = src.execute("SELECT COUNT(*) FROM emb WHERE model=?", (args.model,)).fetchone()[0]
+    if not n:
+        raise SystemExit("fatal: no rows for model %r in %s" % (args.model, args.emb))
+    print("converting %d vectors%s" % (n, " truncated to %d dims" % args.dims
+                                       if args.dims else ""), file=sys.stderr)
+    done = 0
+    t0 = time.time()
+    batch = []
+    for form, text, vec in src.execute(
+            "SELECT form, text, vec FROM emb WHERE model=?", (args.model,)):
+        a = np.asarray(json.loads(vec), dtype="float32")
+        if args.dims and args.dims < a.shape[0]:
+            a = a[:args.dims]
+        a = a / (np.linalg.norm(a) + 1e-9)
+        batch.append((form, args.model, int(a.shape[0]), a.tobytes()))
+        if args.keep_text:
+            dst.execute("INSERT OR REPLACE INTO emb VALUES (?,?,?,?,?,?)",
+                        (form, text, args.model, int(a.shape[0]), "[]", ""))
+        if len(batch) >= 2000:
+            dst.executemany("INSERT OR REPLACE INTO vec VALUES (?,?,?,?)", batch)
+            dst.commit()
+            done += len(batch)
+            batch = []
+            print("  %d/%d  %.0f/s" % (done, n, done / max(time.time()-t0, 1e-9)),
+                  file=sys.stderr)
+    if batch:
+        dst.executemany("INSERT OR REPLACE INTO vec VALUES (?,?,?,?)", batch)
+        dst.commit()
+        done += len(batch)
+    dst.execute("VACUUM")
+    dst.close()
+    sz = os.path.getsize(args.out)
+    print("wrote %d vectors -> %s (%.0f MB, was %.0f MB)"
+          % (done, args.out, sz/1e6, os.path.getsize(args.emb)/1e6))
+    print("Every later command loads from this in seconds. Pass --emb %s from now on."
+          % args.out)
+    return 0
+
+
+# --------------------------------------------------------------------------
+# calibrate - choose the merge threshold from data, not from a guess
+# --------------------------------------------------------------------------
+
+def cmd_calibrate(args):
+    """Compare the similarity of pairs that ARE the same construct against pairs
+    that are not, and report where they separate.
+
+    A guessed threshold produced a single cluster holding 95% of the corpus.
+    The distribution of cosine similarities is model-specific, so it has to be
+    measured before any merging is done.
+    """
+    import numpy as np
+    import random
+    run_id, mentions = load_mentions(args.ledger, args.run_id, args.corpus)
+    surface_forms(mentions)
+    keys, V = load_vectors(args.emb, args.model, args.dims)
+    idx = {k: i for i, k in enumerate(keys)}
+    print("vectors %d x %d" % V.shape, file=sys.stderr)
+
+    by_name = collections.defaultdict(set)
+    for m in mentions:
+        if m["form"] in idx:
+            by_name[m["key"]].add(m["form"])
+
+    rnd = random.Random(args.seed)
+    # POSITIVES: two different wordings that the extractor gave the SAME name
+    pos = []
+    cand = [v for v in by_name.values() if len(v) >= 2]
+    rnd.shuffle(cand)
+    for forms in cand[:args.sample]:
+        a, b = rnd.sample(sorted(forms), 2)
+        pos.append(float(V[idx[a]] @ V[idx[b]]))
+    # NEGATIVES: random pairs, overwhelmingly different constructs
+    names = sorted(by_name)
+    neg = []
+    for _ in range(args.sample):
+        n1, n2 = rnd.sample(names, 2)
+        a = rnd.choice(sorted(by_name[n1])); b = rnd.choice(sorted(by_name[n2]))
+        neg.append(float(V[idx[a]] @ V[idx[b]]))
+
+    def pct(v, q):
+        v = sorted(v)
+        return v[min(len(v) - 1, int(q * len(v)))]
+
+    print("\n%-28s %6s %6s %6s %6s %6s %6s" % ("", "p01", "p05", "p25", "p50", "p95", "p99"))
+    print("%-28s %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f" % (
+        "SAME construct (n=%d)" % len(pos),
+        pct(pos,.01), pct(pos,.05), pct(pos,.25), pct(pos,.50), pct(pos,.95), pct(pos,.99)))
+    print("%-28s %6.3f %6.3f %6.3f %6.3f %6.3f %6.3f" % (
+        "random pairs   (n=%d)" % len(neg),
+        pct(neg,.01), pct(neg,.05), pct(neg,.25), pct(neg,.50), pct(neg,.95), pct(neg,.99)))
+
+    print("\n%-8s %10s %10s" % ("thresh", "kept-same", "false-merge"))
+    best = None
+    for t in [x / 100.0 for x in range(70, 100)]:
+        tp = sum(1 for v in pos if v >= t) / max(len(pos), 1)
+        fp = sum(1 for v in neg if v >= t) / max(len(neg), 1)
+        if t * 100 % 2 == 0:
+            print("%-8.2f %9.1f%% %10.2f%%" % (t, 100 * tp, 100 * fp))
+        if fp <= args.max_false and best is None:
+            best = (t, tp, fp)
+    if best:
+        print("\nlowest threshold holding false merges under %.2f%%: %.2f "
+              "(keeps %.1f%% of same-construct pairs)"
+              % (100 * args.max_false, best[0], 100 * best[1]))
+        print("Use --threshold %.2f, and read the example merges before trusting it."
+              % best[0])
+    else:
+        print("\nNo threshold below 0.99 keeps false merges under %.2f%%. Either the "
+              "embeddings are not separating these constructs, or --dims truncated "
+              "too far." % (100 * args.max_false))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# canon
+# --------------------------------------------------------------------------
+
+def cmd_canon(args):
+    import numpy as np
+    run_id, mentions = load_mentions(args.ledger, args.run_id, args.corpus)
+    surface_forms(mentions)
+    print("mentions %d" % len(mentions), file=sys.stderr)
+
+    # stage 1: exact normalised-name grouping (free, and always correct)
+    groups = {}
+    for m in mentions:
+        groups.setdefault(m["key"], []).append(m)
+    print("after exact-name merge: %d groups" % len(groups), file=sys.stderr)
+
+    # stage 2: semantic merge, with lexical blocking.
+    #
+    # Two problems had to be solved together. (a) Single-linkage union-find
+    # chains: A~B and B~C merge A and C, which collapsed this corpus into one
+    # cluster holding 95% of mentions. (b) Even without chaining, comparing every
+    # group to every leader is tens of millions of comparisons, so a per-pair
+    # false-merge rate of 0.5% -- which calibration puts at threshold 0.84 --
+    # still produces hundreds of thousands of wrong merges.
+    #
+    # So: leader clustering (every member within `threshold` of one reference
+    # point, no chains) restricted to candidates that share a DISCRIMINATING
+    # word. "user satisfaction with MDS" and "user satisfaction" share
+    # "satisfaction"; "user satisfaction" and "user participation" share only
+    # "user", which is too common to license a comparison. Blocking cuts the
+    # comparison count by orders of magnitude, which is what makes a
+    # recall-friendly threshold safe.
+    assign = {k: k for k in groups}
+    merged_pairs = []
+    if args.emb:
+        import numpy as np
+        keys, V = load_vectors(args.emb, args.model, args.dims)
+        idx = {k: i for i, k in enumerate(keys)}
+        order = sorted(groups.items(), key=lambda kv: -len(kv[1]))
+        gk, cents = [], []
+        for k, ms in order:
+            vs = [V[idx[m["form"]]] for m in ms if m["form"] in idx]
+            if vs:
+                c = np.mean(vs, axis=0)
+                cents.append(c / (np.linalg.norm(c) + 1e-9))
+                gk.append(k)
+        C = np.asarray(cents, dtype="float32")
+        STOP = {"of", "the", "for", "and", "in", "on", "a", "an", "to", "with",
+                "by", "from", "as", "at", "or", "s"}
+
+        def stem(t):
+            return t[:-1] if len(t) > 4 and t.endswith("s") else t
+
+        def toks(k):
+            return {stem(t) for t in k.split() if t and t not in STOP and len(t) > 2}
+
+        def qualifies(a, b):
+            """May these two names denote the same construct?
+
+            Embedding similarity alone follows the head noun and drops the
+            modifier: it merges "perceived usefulness" with "perceived ease of
+            use" (TAM's two constructs), "information quality" with "service
+            quality" (two dimensions of DeLone & McLean), and "user
+            satisfaction" with "job satisfaction". In IS the modifier is what
+            individuates the construct, so a merge additionally requires that one
+            name be a QUALIFICATION of the other -- its token set a superset --
+            e.g. "user satisfaction" and "user satisfaction with MDS". Names that
+            merely share a head noun are left apart.
+
+            A single-token name is never absorbed into a longer one: bare
+            "performance" is genuinely ambiguous, not a shorthand for whichever
+            construct happens to be most frequent.
+            """
+            ta, tb = tk[a], tk[b]
+            if not ta or not tb:
+                return False
+            if ta == tb:
+                return True
+            if min(len(ta), len(tb)) < 2:
+                return False
+            return ta <= tb or tb <= ta
+
+        df = collections.Counter()
+        tk = {}
+        for k in gk:
+            tk[k] = toks(k)
+            for t in tk[k]:
+                df[t] += 1
+        cap = max(2, int(args.max_block_frac * len(gk)))
+        rare = {t for t, c in df.items() if c <= cap}
+        print("blocking: %d distinct tokens, %d discriminating (appear in <= %d "
+              "groups)" % (len(df), len(rare), cap), file=sys.stderr)
+
+        blocks = collections.defaultdict(list)     # token -> leader indices
+        leaders = []
+        no_block = 0
+        for i, k in enumerate(gk):
+            mine = tk[k] & rare if not args.no_blocking else None
+            if args.no_blocking:
+                cand = list(range(len(leaders)))
+            elif mine:
+                seen = set()
+                cand = [j for t in mine for j in blocks[t]
+                        if not (j in seen or seen.add(j))]
+            else:
+                cand = []
+                no_block += 1
+            if not args.no_subset_rule:
+                cand = [j for j in cand if qualifies(gk[leaders[j]], k)]
+            best_j, best_s = -1, -1.0
+            if cand:
+                sims = C[[leaders[j] for j in cand]] @ C[i]
+                a = int(np.argmax(sims))
+                best_j, best_s = cand[a], float(sims[a])
+            if best_j >= 0 and best_s >= args.threshold and (
+                    args.no_subset_rule or qualifies(gk[leaders[best_j]], k)):
+                assign[k] = gk[leaders[best_j]]
+                if len(merged_pairs) < 60:
+                    merged_pairs.append((gk[leaders[best_j]], k, best_s))
+            else:
+                leaders.append(i)
+                assign[k] = k
+                for t in (tk[k] & rare):
+                    blocks[t].append(len(leaders) - 1)
+            if (i + 1) % 4000 == 0:
+                print("  %d/%d groups, %d clusters" % (i + 1, len(gk), len(leaders)),
+                      file=sys.stderr)
+        print("  %d/%d groups, %d clusters (%d had no discriminating token and "
+              "were left unmerged)" % (len(gk), len(gk), len(leaders), no_block),
+              file=sys.stderr)
+
+    def find(x):
+        return assign.get(x, x)
+
+    canon = {}
+    for k in groups:
+        canon.setdefault(find(k), []).extend(groups[k])
+    print("after semantic merge: %d canonical constructs" % len(canon), file=sys.stderr)
+
+    def vote(counter):
+        tot = sum(counter.values())
+        top, n = counter.most_common(1)[0]
+        return top, round(1 - n / tot, 4)
+
+    rows = []
+    for k, ms in canon.items():
+        yrs = [m["year"] for m in ms if m["year"]]
+        org = collections.Counter(m["origin"] for m in ms)
+        prx = collections.Counter(m["proximity"] for m in ms)
+        disp = collections.Counter(m["name"] for m in ms)
+        disc = collections.Counter(m["origin_discipline"] for m in ms
+                                   if m["origin_discipline"])
+        origin, org_dis = vote(org)
+        prox, prox_dis = vote(prx)
+        rows.append({
+            "canonical": disp.most_common(1)[0][0],
+            "key": k,
+            "n_mentions": len(ms),
+            "n_surface_forms": len(disp),
+            "surface_forms": [x for x, _ in disp.most_common(6)],
+            "form_hashes": sorted({m["form"] for m in ms}),
+            "first_year": min(yrs) if yrs else None,
+            "last_year": max(yrs) if yrs else None,
+            "years": sorted(set(yrs)),
+            "journals": sorted({m["journal"] for m in ms if m["journal"]}),
+            "origin": origin, "origin_dissent": org_dis,
+            "origin_discipline": (disc.most_common(1)[0][0] if disc and
+                                  origin == "borrowed" else None),
+            "proximity": prox, "proximity_dissent": prox_dis,
+            "roles": dict(collections.Counter(m["role"] for m in ms)),
+            "doc_ids": [m["doc_id"] for m in ms][:50],
+        })
+    rows.sort(key=lambda r: -r["n_mentions"])
+
+    d = os.path.dirname(os.path.abspath(args.out))
+    if d and not os.path.isdir(d):
+        os.makedirs(d, exist_ok=True)
+    with open(args.out, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    biggest = rows[0]["n_mentions"] if rows else 0
+    share = biggest / max(len(mentions), 1)
+    if share > args.max_cluster_share:
+        print("\nREFUSING TO WRITE: the largest cluster holds %d of %d mentions "
+              "(%.1f%%)." % (biggest, len(mentions), 100 * share), file=sys.stderr)
+        print("That is a collapsed clustering, not a canonicalisation. Raise "
+              "--threshold (run `iscgeo calibrate` to pick one from data), or "
+              "override with --max-cluster-share if you really mean it.",
+              file=sys.stderr)
+        print("Its name would be %r, absorbing: %s"
+              % (rows[0]["canonical"], ", ".join(rows[0]["surface_forms"][:6])),
+              file=sys.stderr)
+        return 1
+
+    sing = sum(1 for r in rows if r["n_mentions"] == 1)
+    print("\nwrote %d canonical constructs -> %s" % (len(rows), args.out))
+    print("singletons %d (%.1f%%)   merged from %d mentions"
+          % (sing, 100.0 * sing / len(rows), len(mentions)))
+    if merged_pairs:
+        print("\nexample semantic merges")
+        for a, b, s in merged_pairs[:12]:
+            print("  %.3f  %-38s <- %s" % (s, a[:38], b[:44]))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# interp - the interpolation index
+# --------------------------------------------------------------------------
+
+def nnls(A, b):
+    """Non-negative least squares. scipy when available, else projected gradient."""
+    import numpy as np
+    try:
+        from scipy.optimize import nnls as _nnls
+        return _nnls(A, b)[0]
+    except Exception:  # noqa: BLE001
+        x = np.zeros(A.shape[1], dtype="float64")
+        AtA, Atb = A.T @ A, A.T @ b
+        L = np.linalg.norm(AtA, 2) + 1e-9
+        for _ in range(400):
+            x = np.maximum(0.0, x - (AtA @ x - Atb) / L)
+        return x
+
+
+def cmd_interp(args):
+    import numpy as np
+    keys, V = load_vectors(args.emb, args.model, args.dims)
+    idx = {k: i for i, k in enumerate(keys)}
+
+    rows = [json.loads(l) for l in open(args.canon, encoding="utf-8") if l.strip()]
+    # one vector per canonical construct: mean of its surface forms
+    vecs, keep = [], []
+    missing = 0
+    for r in rows:
+        fs = r.get("form_hashes")
+        if fs is None:
+            raise SystemExit("fatal: this canon file predates form_hashes; re-run "
+                             "`iscgeo canon` so interp can match embeddings to "
+                             "constructs.")
+        have = [idx[f] for f in fs if f in idx]
+        if not have:
+            missing += 1
+        if not have or not r.get("first_year"):
+            continue
+        v = V[have].mean(axis=0)
+        vecs.append(v / (np.linalg.norm(v) + 1e-9))
+        keep.append(r)
+    if not vecs:
+        raise SystemExit("fatal: no canonical construct matched an embedding. The "
+                         "canon file and the embedding store must come from the same "
+                         "ledger and model.")
+    X = np.asarray(vecs, dtype="float32")
+    print("constructs with vectors and a first year: %d (%d had no embedding)"
+          % (len(keep), missing), file=sys.stderr)
+
+    years = np.array([r["first_year"] for r in keep])
+    out = []
+    for yr in range(args.year_from, args.year_to + 1):
+        new = np.nonzero(years == yr)[0]
+        prior = np.nonzero(years < yr)[0]
+        if len(new) == 0 or len(prior) < args.min_prior:
+            continue
+        # cap the basis for tractability: the nearest `--basis` prior constructs
+        P = X[prior]
+        for i in new:
+            sims = P @ X[i]
+            take = np.argsort(-sims)[:args.basis]
+            A = P[take].T.astype("float64")
+            w = nnls(A, X[i].astype("float64"))
+            resid = float(np.linalg.norm(X[i] - A @ w))
+            out.append({"canonical": keep[i]["canonical"], "year": int(yr),
+                        "interpolation_residual": round(resid, 5),
+                        "n_prior": int(len(prior)),
+                        "origin": keep[i]["origin"],
+                        "proximity": keep[i]["proximity"],
+                        "n_mentions": keep[i]["n_mentions"]})
+        print("  %d: %d new constructs against %d prior"
+              % (yr, len(new), len(prior)), file=sys.stderr)
+
+    with open(args.out, "w", encoding="utf-8") as f:
+        for r in out:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    print("\nwrote %d rows -> %s" % (len(out), args.out))
+
+    by = collections.defaultdict(list)
+    for r in out:
+        by[(r["year"] // 5) * 5].append(r["interpolation_residual"])
+    print("\nmean extrapolation distance of newly introduced constructs")
+    print("(higher = further outside what the field already had)")
+    for b in sorted(by):
+        v = by[b]
+        print("  %d-%d  n=%5d  mean %.4f" % (b, b + 4, len(v), sum(v) / len(v)))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# profile
+# --------------------------------------------------------------------------
+
+def cmd_profile(args):
+    rows = [json.loads(l) for l in open(args.canon, encoding="utf-8") if l.strip()]
+    n = len(rows)
+    sing = sum(1 for r in rows if r["n_mentions"] == 1)
+    print("canonical constructs      %d" % n)
+    print("singletons                %d (%.1f%%)" % (sing, 100.0 * sing / n))
+    print("mentions covered          %d" % sum(r["n_mentions"] for r in rows))
+    multi = [r for r in rows if r["n_mentions"] >= 3]
+    if multi:
+        print("\nmajority-vote dissent among constructs seen 3+ times (n=%d)" % len(multi))
+        for f in ("origin_dissent", "proximity_dissent"):
+            vals = [r[f] for r in multi]
+            print("  %-20s mean %.1f%%   unanimous %.1f%%"
+                  % (f.replace("_dissent", ""), 100 * sum(vals) / len(vals),
+                     100.0 * sum(1 for v in vals if v == 0) / len(vals)))
+    print("\nfirst-appearance cohorts")
+    print("%-10s %7s %8s %8s | %12s %11s %8s"
+          % ("period", "new", "native", "borrow", "constitutive", "contingent", "absent"))
+    per = collections.defaultdict(list)
+    for r in rows:
+        if r.get("first_year"):
+            per[(r["first_year"] // 5) * 5].append(r)
+    for b in sorted(per):
+        g = per[b]
+        o = collections.Counter(r["origin"] for r in g)
+        p = collections.Counter(r["proximity"] for r in g)
+        k = len(g)
+        print("%-10s %7d %7.1f%% %7.1f%% | %11.1f%% %10.1f%% %7.1f%%"
+              % ("%d-%d" % (b, b + 4), k, 100 * o["native_is"] / k,
+                 100 * o["borrowed"] / k, 100 * p["constitutive"] / k,
+                 100 * p["contingent"] / k, 100 * p["absent"] / k))
+    print("\nmost frequent constructs")
+    for r in rows[:args.limit]:
+        print("  %5d  %-40s %-10s %-13s forms=%d"
+              % (r["n_mentions"], r["canonical"][:40], r["origin"],
+                 r["proximity"], r["n_surface_forms"]))
+    return 0
+
+
+# --------------------------------------------------------------------------
+
+def main():
+    p = argparse.ArgumentParser(prog="iscgeo", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--version", action="version", version="iscgeo " + TOOL_VERSION)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    pe = sub.add_parser("embed", help="embed construct surface forms")
+    pe.add_argument("--ledger", required=True)
+    pe.add_argument("--corpus", default=None)
+    pe.add_argument("--run-id", default=None)
+    pe.add_argument("--out", default="emb.sqlite")
+    pe.add_argument("--model", default=DEFAULT_EMBED_MODEL)
+    pe.add_argument("--provider", default="gemini", choices=["gemini", "mock"])
+    pe.add_argument("--batch", type=int, default=100)
+    pe.add_argument("--sleep", type=float, default=0.05)
+    pe.add_argument("--timeout", type=int, default=120)
+    pe.set_defaults(func=cmd_embed)
+
+    pc = sub.add_parser("canon", help="merge mentions into canonical constructs")
+    pc.add_argument("--ledger", required=True)
+    pc.add_argument("--corpus", required=True)
+    pc.add_argument("--run-id", default=None)
+    pc.add_argument("--emb", default=None,
+                    help="embedding store; without it only exact names merge")
+    pc.add_argument("--model", default=DEFAULT_EMBED_MODEL)
+    pc.add_argument("--threshold", type=float, default=0.88,
+                    help="cosine similarity above which two names are one construct")
+    pc.add_argument("--out", default="canon.jsonl")
+    pc.add_argument("--dims", type=int, default=768,
+                    help="truncate embeddings to N dims (Matryoshka); 0 = full")
+    pc.add_argument("--max-block-frac", type=float, default=0.02,
+                    help="a word appearing in more than this share of group names "
+                         "is too common to license a merge comparison")
+    pc.add_argument("--no-subset-rule", action="store_true",
+                    help="merge on embedding similarity alone. Do not: it merges "
+                         "'perceived usefulness' with 'perceived ease of use'.")
+    pc.add_argument("--no-blocking", action="store_true",
+                    help="compare against every leader (slow, and far more false "
+                         "merges at any given threshold)")
+    pc.add_argument("--max-cluster-share", type=float, default=0.15,
+                    help="refuse to write if one cluster holds more than this "
+                         "share of all mentions -- the collapse guard")
+    pc.set_defaults(func=cmd_canon)
+
+    pcp = sub.add_parser("compact",
+                         help="rewrite a JSON embedding store as float32 blobs "
+                              "(much smaller, loads in seconds)")
+    pcp.add_argument("--emb", required=True)
+    pcp.add_argument("--out", required=True)
+    pcp.add_argument("--model", default=DEFAULT_EMBED_MODEL)
+    pcp.add_argument("--dims", type=int, default=768,
+                     help="truncate to N dims while converting; 0 keeps all")
+    pcp.add_argument("--keep-text", action="store_true",
+                     help="also copy the source texts (bigger; useful for auditing)")
+    pcp.set_defaults(func=cmd_compact)
+
+    pcal = sub.add_parser("calibrate",
+                          help="measure where same-construct and different-construct "
+                               "similarities separate, and suggest a threshold")
+    pcal.add_argument("--ledger", required=True)
+    pcal.add_argument("--corpus", required=True)
+    pcal.add_argument("--emb", required=True)
+    pcal.add_argument("--run-id", default=None)
+    pcal.add_argument("--model", default=DEFAULT_EMBED_MODEL)
+    pcal.add_argument("--dims", type=int, default=768)
+    pcal.add_argument("--sample", type=int, default=3000)
+    pcal.add_argument("--max-false", type=float, default=0.01)
+    pcal.add_argument("--seed", type=int, default=17)
+    pcal.set_defaults(func=cmd_calibrate)
+
+    pi = sub.add_parser("interp", help="interpolation index for new constructs")
+    pi.add_argument("--canon", required=True)
+    pi.add_argument("--emb", required=True)
+    pi.add_argument("--model", default=DEFAULT_EMBED_MODEL)
+    pi.add_argument("--dims", type=int, default=768)
+    pi.add_argument("--out", default="interp.jsonl")
+    pi.add_argument("--year-from", type=int, default=1995)
+    pi.add_argument("--year-to", type=int, default=2024)
+    pi.add_argument("--basis", type=int, default=200,
+                    help="nearest prior constructs used as the reconstruction basis")
+    pi.add_argument("--min-prior", type=int, default=50)
+    pi.set_defaults(func=cmd_interp)
+
+    pp = sub.add_parser("profile", help="summarise a canonical ledger")
+    pp.add_argument("canon")
+    pp.add_argument("--limit", type=int, default=25)
+    pp.set_defaults(func=cmd_profile)
+
+    args = p.parse_args()
+    try:
+        sys.exit(args.func(args))
+    except KeyboardInterrupt:
+        print("\ninterrupted", file=sys.stderr)
+        sys.exit(130)
+
+
+if __name__ == "__main__":
+    main()
