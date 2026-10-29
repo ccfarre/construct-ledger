@@ -1,0 +1,413 @@
+#!/usr/bin/env python3
+"""build-assets-mgmt-v2: site data, plus the structures the check panel needs.
+
+Adds to v1: a co-occurrence graph over constructs that share a paper, connected
+components over that graph as empirical construct neighbourhoods, and a head-noun
+family index, so a reader can place a construct the ledger has never seen.
+
+Written for the Organization Science "AI-Enabled Frontiers" artifact. Differs from
+build-ledger-assets-v2 (left untouched) in three ways:
+
+  * carries PROVENANCE: every construct ships the verbatim spans it was extracted
+    from, with character offsets into a short context window, so a reader can
+    check the grounding claim rather than take it on trust.
+  * ships only a context window around each span, not the source abstract. The
+    repository is public and the abstracts are the publishers'; a span plus 120
+    characters either side is what verification needs.
+  * shards the detail so the browser fetches one small file per construct opened
+    instead of a single multi-megabyte blob.
+
+Reads only. No API calls, no cost.
+
+    build-assets-mgmt --canon canon_mgmt_t84.jsonl --ledger ledger_mgmt_v2.jsonl \\
+        --corpus corpus_mgmt_clean.jsonl --out site/data --label management
+"""
+import argparse, collections, hashlib, json, os, re, sys
+
+CONTEXT = 120          # characters either side of a span
+MAX_DEFS = 5           # distinct definitions kept per construct
+SHARD = 100            # constructs per detail file
+
+WS = re.compile(r"\s+")
+PUNCT = re.compile(r"[^a-z0-9\- ]+")
+STOP = {"of","the","for","and","in","on","a","an","to","with","by","from","as","at","or","s"}
+
+
+def log(s): print(s, file=sys.stderr)
+
+
+def norm(s):
+    return WS.sub(" ", PUNCT.sub(" ", (s or "").lower())).strip()
+
+
+def toks(s):
+    return set(norm(s).split())
+
+
+def words(s):
+    return re.findall(r"[a-z0-9]+", (s or "").lower())
+
+
+def distinct_enough(cand, kept, thresh=0.55):
+    ct = toks(cand)
+    if len(ct) < 5:
+        return False
+    for k in kept:
+        kt = toks(k)
+        if len(ct & kt) / (len(ct | kt) or 1) > thresh:
+            return False
+    return True
+
+
+def head_noun(name):
+    w = [t for t in norm(name).split() if t not in STOP]
+    return w[-1] if w else ""
+
+
+def locate(span, abstract):
+    """Find the span in the abstract. Returns (start, end) or None.
+
+    Tries the literal string first, then a whitespace-tolerant match, because the
+    model copies words faithfully but not always the spacing around them.
+    """
+    if not span or not abstract:
+        return None
+    i = abstract.find(span)
+    if i >= 0:
+        return i, i + len(span)
+    ws = [re.escape(w) for w in span.split()]
+    if not ws:
+        return None
+    m = re.search(r"\s+".join(ws), abstract, re.I)
+    return (m.start(), m.end()) if m else None
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="build-assets-mgmt")
+    ap.add_argument("--canon", required=True)
+    ap.add_argument("--ledger", required=True, help="per-mention jsonl from iscx-mgmt")
+    ap.add_argument("--corpus", required=True)
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--label", required=True, help="corpus name shown in the page")
+    ap.add_argument("--threshold", type=float, required=True,
+                    help="the merge threshold this canon was built at, recorded in meta")
+    ap.add_argument("--established", type=int, default=5)
+    ap.add_argument("--min-edge", type=int, default=2,
+                    help="a co-occurrence tie needs at least this many shared papers")
+    ap.add_argument("--min-lift", type=float, default=50.0,
+                    help="and must occur this many times more often than chance")
+    ap.add_argument("--max-spans", type=int, default=6,
+                    help="provenance records kept per construct")
+    a = ap.parse_args()
+
+    meta_doc = {}
+    for line in open(a.corpus, encoding="utf-8"):
+        if line.strip():
+            r = json.loads(line)
+            if r.get("keep"):
+                meta_doc[r["doc_id"]] = r
+    log("corpus documents kept: %d" % len(meta_doc))
+
+    # mention-level records, keyed by the same hash iscgeo used
+    mentions = collections.defaultdict(list)
+    n_men = 0
+    n_docs = 0
+    for line in open(a.ledger, encoding="utf-8"):
+        if not line.strip():
+            continue
+        r = json.loads(line)
+        n_docs += 1
+        doc = meta_doc.get(r["doc_id"], {})
+        for c in ((r.get("result") or {}).get("constructs") or []):
+            n_men += 1
+            text = "%s: %s" % (c.get("name") or "", c.get("definition") or "")
+            h = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+            mentions[h].append({
+                "doc_id": r["doc_id"], "journal": r.get("journal"), "year": r.get("year"),
+                "name": c.get("name"), "definition": c.get("definition"),
+                "role": c.get("structural_role") or c.get("role"),
+                "span": c.get("provenance_span"),
+                "abstract": doc.get("abstract") or "",
+            })
+    log("mention records: %d in %d distinct forms" % (n_men, len(mentions)))
+
+    C = [json.loads(l) for l in open(a.canon, encoding="utf-8") if l.strip()]
+    log("canonical constructs: %d" % len(C))
+
+    fam = collections.Counter()
+    papers = {}
+    for c in C:
+        ms = [m for h in (c.get("form_hashes") or []) for m in mentions.get(h, [])]
+        papers[c["key"]] = len({m["doc_id"] for m in ms})
+    for c in C:
+        if papers[c["key"]] >= a.established:
+            fam[head_noun(c["canonical"])] += 1
+
+    os.makedirs(a.out, exist_ok=True)
+    os.makedirs(os.path.join(a.out, "detail"), exist_ok=True)
+
+    index = []
+    shard, shard_i = {}, 0
+    grounded = ungrounded = 0
+    journals = collections.Counter()
+    years = collections.Counter()
+
+    C.sort(key=lambda c: -c["n_mentions"])
+    for i, c in enumerate(C):
+        ms = [m for h in (c.get("form_hashes") or []) for m in mentions.get(h, [])]
+        ms.sort(key=lambda m: (m.get("year") or 0))
+        head = head_noun(c["canonical"])
+
+        # walk the mentions spread across the whole period rather than taking the
+        # earliest few, so a construct used for thirty years does not look like a
+        # construct used in one year
+        def spread(seq, want):
+            if len(seq) <= want:
+                return list(seq)
+            step = len(seq) / float(want)
+            picked = [seq[int(i * step)] for i in range(want)]
+            rest = [m for m in seq if m not in picked]
+            return picked + rest
+
+        ms_defs = spread(ms, MAX_DEFS * 4)
+        ms_prov = spread(ms, a.max_spans * 4)
+
+        defs, kept = [], []
+        for m in ms_defs:
+            d = (m["definition"] or "").strip()
+            if d and distinct_enough(d, kept, 0.55):
+                kept.append(d)
+                defs.append({"d": d, "y": m["year"], "j": m["journal"], "id": m["doc_id"]})
+            if len(defs) >= MAX_DEFS:
+                break
+
+        # grounding is checked on EVERY mention; only the display sample is spread
+        for m in ms:
+            if locate(m["span"] or "", m["abstract"]):
+                grounded += 1
+            else:
+                ungrounded += 1
+
+        prov = []
+        for m in ms_prov:
+            if len(prov) >= a.max_spans:
+                break
+            at = locate(m["span"] or "", m["abstract"])
+            if not at:
+                continue
+            s, e = at
+            lo, hi = max(0, s - CONTEXT), min(len(m["abstract"]), e + CONTEXT)
+            prov.append({
+                "ctx": ("..." if lo > 0 else "") + m["abstract"][lo:hi] + ("..." if hi < len(m["abstract"]) else ""),
+                "s": s - lo + (3 if lo > 0 else 0),
+                "e": e - lo + (3 if lo > 0 else 0),
+                "id": m["doc_id"], "y": m["year"], "j": m["journal"], "n": m["name"],
+            })
+        for m in ms:
+            if m["journal"]:
+                journals[m["journal"]] += 1
+            if m["year"]:
+                years[m["year"]] += 1
+
+        np_ = papers[c["key"]]
+        index.append({
+            "i": i, "n": c["canonical"], "k": c["key"], "m": c["n_mentions"], "p": np_,
+            "f": c.get("first_year"), "l": c.get("last_year"),
+            "r": c.get("roles") or {}, "sf": c.get("n_surface_forms"),
+            "h": head, "fs": fam.get(head, 0), "nd": len(defs),
+        })
+        shard[str(i)] = {
+            "n": c["canonical"], "defs": defs, "prov": prov,
+            "forms": c.get("surface_forms") or [], "journals": c.get("journals") or [],
+            "years": c.get("years") or [], "roles": c.get("roles") or {},
+            "m": c["n_mentions"], "p": np_,
+        }
+        if len(shard) >= SHARD:
+            json.dump(shard, open(os.path.join(a.out, "detail", "%04d.json" % shard_i),
+                                  "w", encoding="utf-8"), ensure_ascii=False,
+                      separators=(",", ":"))
+            shard, shard_i = {}, shard_i + 1
+    if shard:
+        json.dump(shard, open(os.path.join(a.out, "detail", "%04d.json" % shard_i),
+                              "w", encoding="utf-8"), ensure_ascii=False,
+                  separators=(",", ":"))
+        shard_i += 1
+
+    json.dump(index, open(os.path.join(a.out, "constructs.json"), "w", encoding="utf-8"),
+              ensure_ascii=False, separators=(",", ":"))
+
+    # ------------------------------------------------------------------
+    # precomputed series for the figures, so the page draws rather than
+    # recomputes over 236 shards
+    # ------------------------------------------------------------------
+    est_keys = {c["key"] for c in C if papers[c["key"]] >= a.established}
+    first_seen = collections.Counter()
+    men_year = collections.Counter()
+    est_men_year = collections.Counter()
+    docs_year = collections.Counter()
+    for d in meta_doc.values():
+        if d.get("year"):
+            docs_year[d["year"]] += 1
+    for c in C:
+        if c.get("first_year"):
+            first_seen[c["first_year"]] += 1
+        est = c["key"] in est_keys
+        for h in (c.get("form_hashes") or []):
+            for m in mentions.get(h, []):
+                y = m.get("year")
+                if not y:
+                    continue
+                men_year[y] += 1
+                if est:
+                    est_men_year[y] += 1
+
+    pap_hist = collections.Counter(min(papers[c["key"]], 20) for c in C)
+    men_hist = collections.Counter(min(c["n_mentions"], 20) for c in C)
+    def_hist = collections.Counter(
+        min(e["nd"], 5) for e in index if e["p"] >= a.established)
+
+    yrs = sorted(y for y in men_year if 1900 < y < 2100)
+    figures = {
+        "recurrence_papers": [[k, pap_hist[k]] for k in sorted(pap_hist)],
+        "recurrence_mentions": [[k, men_hist[k]] for k in sorted(men_hist)],
+        "definitions_established": [[k, def_hist[k]] for k in sorted(def_hist)],
+        "by_year": [{"y": y, "docs": docs_year.get(y, 0), "mentions": men_year[y],
+                     "first_seen": first_seen.get(y, 0),
+                     "established_mentions": est_men_year.get(y, 0)} for y in yrs],
+        "journals": [[j, n] for j, n in journals.most_common()],
+    }
+    json.dump(figures, open(os.path.join(a.out, "figures.json"), "w", encoding="utf-8"),
+              ensure_ascii=False, separators=(",", ":"))
+
+    # ------------------------------------------------------------------
+    # co-occurrence: two constructs are tied when a paper asserts both.
+    # The strongest ties are the recognisable theoretical dyads, so the
+    # components of this graph are an empirical reading of what counts as
+    # one theoretical neighbourhood in this field.
+    # ------------------------------------------------------------------
+    import itertools
+    pos = {c["key"]: i for i, c in enumerate(C)}
+    bydoc = collections.defaultdict(set)
+    for i, c in enumerate(C):
+        for h in (c.get("form_hashes") or []):
+            for m in mentions.get(h, []):
+                bydoc[m["doc_id"]].add(i)
+    pair = collections.Counter()
+    for s_ in bydoc.values():
+        if len(s_) < 2:
+            continue
+        for x, y in itertools.combinations(sorted(s_), 2):
+            pair[(x, y)] += 1
+
+    # A raw co-occurrence count ties every construct to "firm performance",
+    # which appears in 392 papers, and connected components then collapse into
+    # one blob of 756. Keeping a tie only when the two constructs co-occur far
+    # more often than their separate frequencies would predict removes those
+    # hub ties and leaves neighbourhoods that are readable as literatures.
+    ndoc = len([1 for s_ in bydoc.values() if s_])
+    df = collections.Counter()
+    for s_ in bydoc.values():
+        for x in s_:
+            df[x] += 1
+    edges = []
+    for (x, y), n in pair.items():
+        if n < a.min_edge:
+            continue
+        expected = df[x] * df[y] / float(ndoc or 1)
+        lift = n / expected if expected > 0 else 0.0
+        if lift < a.min_lift:
+            continue
+        edges.append([x, y, n, round(lift, 1)])
+    edges.sort(key=lambda e: -e[2])
+
+    # connected components over the retained edges
+    parent = {}
+    def find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]; x = parent[x]
+        return x
+    for x, y, _n, _l in edges:
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[rx] = ry
+    comp = collections.defaultdict(list)
+    for x in list(parent):
+        comp[find(x)].append(x)
+    groups = sorted(comp.values(), key=len, reverse=True)
+    cluster_of = {}
+    for ci, g in enumerate(groups):
+        for x in g:
+            cluster_of[x] = ci
+    for e in index:
+        if e["i"] in cluster_of:
+            e["c"] = cluster_of[e["i"]]
+
+    # head-noun families over the whole ledger, not only the established set
+    fam_all = collections.Counter()
+    fam_members = collections.defaultdict(list)
+    for e in index:
+        fam_all[e["h"]] += 1
+        fam_members[e["h"]].append([e["i"], e["p"]])
+    for h in fam_members:
+        fam_members[h].sort(key=lambda r: -r[1])
+        del fam_members[h][24:]
+
+    json.dump({
+        "edges": edges,
+        "min_edge": a.min_edge,
+        "min_lift": a.min_lift,
+        "top_ties": sorted(([n, x, y] for (x, y), n in pair.items() if n >= 3),
+                           reverse=True)[:400],
+        "clusters": [[ci, [x for x in g]] for ci, g in enumerate(groups) if len(g) >= 3],
+        "families": {h: [fam_all[h], fam.get(h, 0), fam_members[h]] for h in fam_all if h},
+    }, open(os.path.join(a.out, "graph.json"), "w", encoding="utf-8"),
+        ensure_ascii=False, separators=(",", ":"))
+    json.dump(index, open(os.path.join(a.out, "constructs.json"), "w", encoding="utf-8"),
+              ensure_ascii=False, separators=(",", ":"))
+
+    meta = {
+        "label": a.label,
+        "documents_in_corpus": len(meta_doc),
+        "documents_extracted": n_docs,
+        "documents_refused": len(meta_doc) - n_docs,
+        "mentions": n_men,
+        "constructs": len(C),
+        "threshold": a.threshold,
+        "established_threshold": a.established,
+        "established": sum(1 for c in C if papers[c["key"]] >= a.established),
+        "single_paper": sum(1 for c in C if papers[c["key"]] == 1),
+        "families": len(fam),
+        "shards": shard_i,
+        "shard_size": SHARD,
+        "context_chars": CONTEXT,
+        "spans_shown": a.max_spans,
+        "spans_checked": grounded + ungrounded,
+        "spans_found_verbatim": grounded,
+        "spans_not_found": ungrounded,
+        "grounding_rate": round(grounded / max(1, grounded + ungrounded), 4),
+        "spans_shipped": sum(1 for _ in ()) or None,
+        "journals": journals.most_common(),
+        "year_min": min(years) if years else None,
+        "year_max": max(years) if years else None,
+    }
+    json.dump(meta, open(os.path.join(a.out, "meta.json"), "w", encoding="utf-8"),
+              ensure_ascii=False, indent=1)
+
+    log("")
+    log("  constructs        %d" % len(C))
+    log("  index file        %.1f MB" % (os.path.getsize(os.path.join(a.out, "constructs.json")) / 1e6))
+    log("  detail shards     %d" % shard_i)
+    log("  spans checked     %d" % (grounded + ungrounded))
+    log("  found verbatim    %d  (grounding rate %.4f)"
+        % (grounded, grounded / max(1, grounded + ungrounded)))
+    log("  established       %d (used in >= %d papers)" % (meta["established"], a.established))
+    log("  figure series     %s" % os.path.join(a.out, "figures.json"))
+    log("  co-occurrence     %d ties over %d constructs, %d neighbourhoods"
+        % (len(edges), len(cluster_of), sum(1 for g in groups if len(g) >= 3)))
+    log("  head-noun families %d" % len([h for h in fam_all if h]))
+    log("  wrote             %s" % a.out)
+
+
+if __name__ == "__main__":
+    main()

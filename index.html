@@ -199,13 +199,14 @@ em{font-style:italic}
 </section>
 
 <section class="panel" id="p-check" hidden>
-  <h2>Check a paper against the ledger</h2>
-  <p class="note">Paste an abstract or a few paragraphs. The page finds construct names
-  that already exist in the ledger, and for each one shows how differently the corpus has
-  defined it. Nothing is uploaded; the matching runs in your browser.</p>
-  <textarea id="paperText" placeholder="Paste an abstract here…"></textarea>
+  <h2>Read a paper against the ledger</h2>
+  <p class="note">Paste a manuscript, or its title and abstract. The page pulls out the
+  constructs the text works with, separates the ones it appears to propose from the ones
+  it borrows, and places each one in the ledger. Nothing is uploaded and no key is needed;
+  the analysis runs in your browser.</p>
+  <textarea id="paperText" placeholder="Paste a title, an abstract, or a whole manuscript..."></textarea>
   <div class="row">
-    <button class="act" id="checkBtn">Find constructs</button>
+    <button class="act" id="checkBtn">Read it</button>
     <button class="act ghost" id="sampleBtn">Use an example</button>
     <span class="note" style="margin:0" id="checkCount"></span>
   </div>
@@ -284,7 +285,7 @@ async function grab(name){
   }
   throw new Error(name + " not found (" + (last||"404") + ")");
 }
-let META=null, IDX=null, FIG=null, SHARDS={}, NAMEMAP=null;
+let META=null, IDX=null, FIG=null, SHARDS={};
 
 /* measured on the runs described in the technical appendix; not derived here */
 const CAL = {
@@ -499,7 +500,7 @@ function drawTiles(){
   document.getElementById("tiles2").innerHTML =
     tile((m.grounding_rate*100).toFixed(2)+"%", "of "+fmt(m.spans_checked)+" spans found verbatim in their own abstract") +
     tile(fmt(m.documents_refused), "abstracts the model refused, every one a non-abstract") +
-    tile("$11.87", "total model cost for the extraction, metered per call") +
+    tile("$12.49", "metered model cost of the extraction, every call counted") +
     tile("188 min", "wall clock at eight workers");
   document.getElementById("corpusLine").textContent =
     m.label + " · " + m.year_min + "–" + m.year_max + " · " +
@@ -523,7 +524,7 @@ function drawTiles(){
     '<tr><td>Corpus assembly from OpenAlex and Crossref</td><td class="num">free</td>'+
     '<td class="num">41 min</td><td>yes, resumable</td></tr>'+
     '<tr><td>Construct extraction, '+fmt(m.documents_extracted)+' abstracts</td>'+
-    '<td class="num">$11.87</td><td class="num">188 min</td><td>yes, paid work is never repeated</td></tr>'+
+    '<td class="num">$12.49</td><td class="num">206 min</td><td>yes, paid work is never repeated</td></tr>'+
     '<tr><td>Embedding '+fmt(40945)+' name-and-definition strings</td><td class="num">$0.20</td>'+
     '<td class="num">15 min</td><td>yes, cached per batch</td></tr>'+
     '<tr><td>Calibration and merging</td><td class="num">free</td><td class="num">4 min</td>'+
@@ -593,75 +594,234 @@ async function showDetail(i){
 }
 
 /* ----------------------------------------------------------------- check */
+/* Two jobs the old lookup did not do. First, find the constructs a paper works
+   with rather than only the names that already exist, so a paper's own
+   contribution is visible. Second, place anything the ledger has never seen,
+   which is the question an author actually has. */
+
+let NAMEMAP=null, GRAPH=null, BYI=null;
+
 function buildNameMap(){
-  NAMEMAP=new Map();
+  NAMEMAP=new Map(); BYI=new Map();
   for(const r of IDX){
-    const k=r.k;
-    if(!k) continue;
-    const prev=NAMEMAP.get(k);
-    if(!prev || prev.p<r.p) NAMEMAP.set(k,r);
+    BYI.set(r.i, r);
+    const prev=NAMEMAP.get(r.k);
+    if(!prev || prev.p<r.p) NAMEMAP.set(r.k,r);
   }
 }
 const normTxt = s => s.toLowerCase().replace(/[^a-z0-9\s-]/g," ").replace(/\s+/g," ").trim();
-function findConstructs(text, minPapers){
-  const words=normTxt(text).split(" ").filter(Boolean);
-  const hits=[]; const seen=new Map();
-  let i=0;
-  while(i<words.length){
-    let matched=0, rec=null;
-    for(let L=Math.min(6,words.length-i); L>=2; L--){
-      const cand=words.slice(i,i+L).join(" ");
-      const r=NAMEMAP.get(cand);
-      if(r && r.p>=minPapers){ matched=L; rec=r; break; }
-    }
-    if(rec){
-      if(!seen.has(rec.i)){ seen.set(rec.i,{rec:rec,n:0}); }
-      seen.get(rec.i).n++;
-      i+=matched;
-    } else i++;
-  }
-  for(const v of seen.values()) hits.push(v);
-  hits.sort((a,b)=>b.rec.p-a.rec.p);
-  return hits;
+const STOPW = new Set(("the a an of and or in on to for with by from as at is are was were be been "+
+  "being this that these those it its their our we us they them he she his her you your i not no "+
+  "but if then than so such which who whom whose what when where how why can could may might will "+
+  "would shall should must do does did done have has had having also more most other others some "+
+  "any all each both few many much very own same into over under between within without across "+
+  "through during before after above below up down out off again further once here there s t "+
+  "et al figure table section appendix however therefore thus moreover furthermore").split(" "));
+/* bibliographic and manuscript furniture that scores well and means nothing */
+const JUNK = /^(et al|academy of management|journal of|organization science|administrative science|strategic management|management review|management journal|see also|in press|working paper|p\s|pp\s|vol\s|no\s|doi)/;
+
+function head(name){
+  const t=normTxt(name).split(" ").filter(x=>x && !STOPW.has(x));
+  return t.length ? t[t.length-1].replace(/ies$/,"y").replace(/s$/,"") : "";
 }
+
+function candidates(text){
+  const words = normTxt(text).split(" ").filter(Boolean);
+  const firstLine = normTxt((text.split("\n").find(l=>l.trim().length>8)||"").slice(0,300));
+  const opening = normTxt(text).split(" ").slice(0,400).join(" ");
+  const cnt=new Map();
+  for(const L of [2,3,4]){
+    for(let i=0;i+L<=words.length;i++){
+      const g=words.slice(i,i+L);
+      if(STOPW.has(g[0])||STOPW.has(g[g.length-1])) continue;
+      if(g.filter(x=>STOPW.has(x)).length>1) continue;
+      if(g.some(x=>x.length<3 && !/^\d/.test(x))) continue;
+      /* a phrase spanning a conjunction is a sentence fragment, not a name */
+      if(g.includes("and")||g.includes("or")||g.includes("between")) continue;
+      const k=g.join(" ");
+      cnt.set(k,(cnt.get(k)||0)+1);
+    }
+  }
+  /* a phrase the text explicitly introduces is a coinage, and authors
+     introduce one with a small set of verbs */
+  const low = normTxt(text);
+  const coined = new Set();
+  const MARK = /\b(we (?:call|term|label|name|define|introduce|propose|refer to)|which we (?:call|term|label)|that we (?:call|term|label)|we use the term|the concept of|defined as|refers to)\s+([a-z0-9][a-z0-9 -]{3,60}?)(?:\s+as\b|[,.;:]|$)/g;
+  let mm;
+  while((mm = MARK.exec(low)) !== null){
+    const phrase = mm[2].trim().split(" ").filter(x=>!STOPW.has(x)).join(" ");
+    if(phrase.split(" ").length>=2) coined.add(phrase);
+  }
+  const rows=[];
+  for(const [k,n] of cnt){
+    if(n<2 || JUNK.test(k)) continue;
+    const inTitle = firstLine.includes(k);
+    const inOpening = opening.includes(k);
+    const isCoined = [...coined].some(c=>c.includes(k)||k.includes(c));
+    const w = k.split(" ").length;
+    const score = n * Math.sqrt(w) * (inTitle?4:(inOpening?1.5:1)) * (isCoined?1.6:1);
+    rows.push({k, n, w, inTitle, inOpening, isCoined, score});
+  }
+  rows.sort((a,b)=>b.score-a.score);
+  /* drop a phrase wholly contained in a better-scoring one, which removes
+     "field compression" when "linguistic field compression" is already there */
+  const kept=[];
+  for(const r of rows){
+    if(kept.some(o=>o.k.includes(r.k) && o.k!==r.k)) continue;
+    kept.push(r);
+    if(kept.length>=60) break;
+  }
+  return kept;
+}
+
+function neighbours(name){
+  const h=head(name), t=new Set(normTxt(name).split(" ").filter(x=>!STOPW.has(x)));
+  const fam = (GRAPH.families[h]||[0,0,[]]);
+  const sib = fam[2].map(r=>BYI.get(r[0])).filter(Boolean);
+  const lex = IDX.filter(r=>{
+    if(r.h!==h) return false;
+    const rt=new Set(normTxt(r.n).split(" ").filter(x=>!STOPW.has(x)));
+    let inter=0; for(const x of t) if(rt.has(x)) inter++;
+    return inter>=1;
+  }).sort((a,b)=>b.p-a.p).slice(0,8);
+  return {head:h, famSize:fam[0], famEstablished:fam[1], siblings:sib.slice(0,8), lex};
+}
+
+function ties(i){
+  const out=[];
+  for(const e of GRAPH.edges){
+    if(e[0]===i) out.push([e[1],e[2],e[3]]);
+    else if(e[1]===i) out.push([e[0],e[2],e[3]]);
+  }
+  out.sort((a,b)=>b[1]-a[1]);
+  return out.slice(0,8);
+}
+
 async function runCheck(){
   const text=document.getElementById("paperText").value;
   const out=document.getElementById("checkOut");
-  if(!text.trim()){ out.innerHTML='<p class="empty">Nothing pasted yet.</p>'; return; }
-  const hits=findConstructs(text,2);
-  document.getElementById("checkCount").textContent =
-    hits.length? hits.length+" construct"+(hits.length===1?"":"s")+" already in the ledger" : "";
-  if(!hits.length){
-    out.innerHTML='<p class="empty">No construct in this text matches a name used in two or '+
-      'more papers in the corpus. That is worth knowing either way: it can mean the '+
-      'vocabulary is genuinely new, or that it is phrased differently from the corpus.</p>';
-    return;
+  if(text.trim().split(/\s+/).length<40){
+    out.innerHTML='<p class="empty">Paste at least a title and an abstract. The analysis '+
+      'works by how often a phrase recurs, so a sentence or two gives it nothing to go on.</p>';
+    document.getElementById("checkCount").textContent=""; return;
   }
-  const parts=['<h2>Constructs this text shares with the corpus</h2>',
-    '<p class="note">Ordered by how widely used each one already is. Click a row to see how '+
-    'the corpus has defined it and to check the grounding.</p>',
-    '<table><thead><tr><th>Construct</th><th class="num">Papers</th><th class="num">Mentions</th>',
-    '<th class="num">In your text</th><th class="num">First seen</th></tr></thead><tbody>'];
-  for(const h of hits)
-    parts.push('<tr data-i="'+h.rec.i+'"><td>'+esc(h.rec.n)+'</td><td class="num">'+h.rec.p+
-      '</td><td class="num">'+h.rec.m+'</td><td class="num">'+h.n+'</td><td class="num">'+
-      (h.rec.f||"")+'</td></tr>');
-  parts.push('</tbody></table>');
-  const est=hits.filter(h=>h.rec.p>=5).length;
-  parts.push('<p class="note" style="margin-top:14px">'+est+' of these '+hits.length+
-    ' are established, meaning five or more papers use them. A construct the corpus already '+
-    'defines in several incompatible ways is one to define explicitly rather than assume.</p>');
-  out.innerHTML=parts.join("");
-  out.querySelectorAll("tbody tr").forEach(tr=>tr.onclick=()=>{
+  /* two independent passes. Borrowed constructs are found by matching ledger
+     names in the text, so a construct named once still counts. Proposed ones
+     are found by recurrence, because a term a paper introduces is a term it
+     uses repeatedly. */
+  const cands=candidates(text);
+  const borrowed=[], proposed=[];
+  const w2=normTxt(text).split(" ").filter(Boolean);
+  const found=new Map();
+  for(let i=0;i<w2.length;){
+    let rec=null, len=0;
+    for(let L=Math.min(6,w2.length-i); L>=2; L--){
+      const r=NAMEMAP.get(w2.slice(i,i+L).join(" "));
+      if(r && r.p>=2){ rec=r; len=L; break; }
+    }
+    if(rec){
+      if(!found.has(rec.i)) found.set(rec.i,{rec:rec,n:0});
+      found.get(rec.i).n++; i+=len;
+    } else i++;
+  }
+  for(const v of found.values()) borrowed.push(v);
+  for(const c of cands){
+    if(c.w<2) continue;
+    const r=NAMEMAP.get(c.k);
+    if(!r || r.p<2) proposed.push(c);
+  }
+  borrowed.sort((a,b)=>b.rec.p-a.rec.p);
+  proposed.sort((a,b)=>b.score-a.score);
+  const top=proposed.slice(0,8);
+
+  document.getElementById("checkCount").textContent =
+    top.length+" candidate"+(top.length===1?"":"s")+" the ledger has not seen, "+
+    borrowed.length+" it has";
+
+  const P=[];
+
+  /* 1. what the paper appears to propose */
+  P.push('<h2>Constructs this paper appears to propose</h2>');
+  P.push('<p class="note">Recurring terms, weighted toward the title and opening, that do '+
+    'not appear as a construct name anywhere in the corpus. A term can be absent because '+
+    'it is new, or because the field words it differently.</p>');
+  if(!top.length) P.push('<p class="empty">Every recurring term in this text already exists in the ledger.</p>');
+  for(const c of top){
+    const nb=neighbours(c.k);
+    const rarity = nb.famSize<=3 ? "an almost empty neighbourhood"
+                 : nb.famSize<=20 ? "a thinly populated neighbourhood" : "a crowded neighbourhood";
+    P.push('<div class="detail" style="border-top-width:1px;margin-top:18px;padding-top:16px">'+
+      '<h3 style="font-size:19px">'+esc(c.k)+'</h3>'+
+      '<p class="meta">'+c.n+' occurrence'+(c.n===1?"":"s")+' in your text'+
+      (c.inTitle?' &middot; in the title':'')+(c.isCoined?' &middot; introduced explicitly':'')+
+      ' &middot; not in the ledger</p>'+
+      '<p class="note" style="margin:0 0 10px">Its head noun is <em>'+esc(nb.head)+'</em>, which '+
+      'heads '+fmt(nb.famSize)+' construct'+(nb.famSize===1?"":"s")+' in the corpus, '+
+      nb.famEstablished+' of them used in five or more papers. That is '+rarity+'.</p>'+
+      (nb.lex.length
+        ? '<p class="note" style="margin:0 0 4px">Nearest existing constructs sharing that head:</p>'+
+          '<table><tbody>'+nb.lex.map(r=>'<tr data-i="'+r.i+'"><td>'+esc(r.n)+
+            '</td><td class="num">'+r.p+' papers</td><td class="num">'+(r.f||"")+'</td></tr>').join("")+
+          '</tbody></table>'
+        : '<p class="note" style="margin:0">No construct in the corpus shares that head noun.</p>')+
+      '</div>');
+  }
+
+  /* 2. what it borrows, and from where */
+  P.push('<h2>Constructs it borrows</h2>');
+  if(!borrowed.length){
+    P.push('<p class="empty">No recurring term matches a construct used in two or more papers.</p>');
+  } else {
+    const clusters=new Map();
+    for(const b of borrowed){
+      const c=b.rec.c;
+      if(c==null) continue;
+      if(!clusters.has(c)) clusters.set(c,[]);
+      clusters.get(c).push(b);
+    }
+    P.push('<p class="note">Ordered by how widely each is already used. The neighbourhood is '+
+      'the group of constructs it co-occurs with far more often than chance, which is this '+
+      'corpus reading of which literature it belongs to.</p>');
+    P.push('<table><thead><tr><th>Construct</th><th class="num">Papers</th>'+
+      '<th class="num">In your text</th><th class="num">First seen</th>'+
+      '<th>Neighbourhood</th></tr></thead><tbody>');
+    for(const b of borrowed.slice(0,25)){
+      const cl=b.rec.c;
+      const label = cl==null ? '<span style="color:var(--ink-3)">no strong ties</span>'
+        : 'with '+(ties(b.rec.i).slice(0,2).map(t=>'<em>'+esc((BYI.get(t[0])||{n:"?"}).n)+'</em>').join(", ")||"others");
+      P.push('<tr data-i="'+b.rec.i+'"><td>'+esc(b.rec.n)+'</td><td class="num">'+b.rec.p+
+        '</td><td class="num">'+b.n+'</td><td class="num">'+(b.rec.f||"")+'</td><td>'+label+'</td></tr>');
+    }
+    P.push('</tbody></table>');
+    const nCl=clusters.size;
+    if(nCl>1) P.push('<p class="note" style="margin-top:14px">These borrowed constructs fall into '+
+      nCl+' different neighbourhoods, so the paper is drawing on more than one literature. '+
+      'A construct that sits between neighbourhoods is doing bridging work, and that is where '+
+      'definitions usually have to be made explicit.</p>');
+    const est=borrowed.filter(b=>b.rec.p>=5).length;
+    P.push('<p class="note">'+est+' of these '+borrowed.length+' are used in five or more papers. '+
+      'A construct the corpus already defines in several incompatible ways is one to define '+
+      'explicitly rather than assume; open any row to see how far those definitions diverge.</p>');
+  }
+  out.innerHTML=P.join("");
+  out.querySelectorAll("tbody tr[data-i]").forEach(tr=>tr.onclick=()=>{
     showTab("browse"); showDetail(+tr.dataset.i);
   });
 }
-const SAMPLE = "We argue that absorptive capacity conditions the relationship between "+
-  "environmental dynamism and firm performance. Drawing on the resource based view, we "+
-  "propose that organizational slack and top management team heterogeneity jointly shape "+
-  "the exploration exploitation balance, and that competitive advantage is sustained only "+
-  "where knowledge transfer across business units is routinised. We test these ideas on a "+
-  "panel of manufacturing firms.";
+
+const SAMPLE = "Between Institutional Validity and Digital Engagement: Selective Weaving and "+
+  "Linguistic Field Compression in Digital Environments\n\n"+
+  "Digital communication environments have become saturated with misinformation, which has "+
+  "altered how organizations signal and acquire legitimacy. We argue that organizations at "+
+  "different validity positions engage in selective weaving, combining the communicative "+
+  "practices of highly validated organizations with the engagement practices of low validity "+
+  "sources. The result is linguistic field compression: the stylistic distance between "+
+  "organizations at different validity positions narrows, even though their journalistic "+
+  "practices do not converge. We test linguistic field compression on a corpus of news "+
+  "organizations and show that selective weaving is strongest among medium-validity "+
+  "organizations, where institutional validity and digital engagement pull hardest against "+
+  "each other. Linguistic field compression therefore explains why audience attention and "+
+  "organizational legitimacy can decouple in digital environments.";
 
 /* ------------------------------------------------------------------ tabs */
 function showTab(p){
@@ -683,7 +843,8 @@ function showTab(p){
   };
   document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>showTab(b.dataset.p));
   try{
-    [META, IDX, FIG] = await Promise.all([grab("meta.json"), grab("constructs.json"), grab("figures.json")]);
+    [META, IDX, FIG, GRAPH] = await Promise.all([grab("meta.json"), grab("constructs.json"),
+       grab("figures.json"), grab("graph.json")]);
   }catch(e){
     document.getElementById("corpusLine").textContent = "could not load the ledger: "+e.message;
     return;
