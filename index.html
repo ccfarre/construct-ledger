@@ -251,8 +251,8 @@ em{font-style:italic}
   <div class="tiles" id="tiles2"></div>
 
   <h2>Every construct the field returns to</h2>
-  <figure class="tall">
-    <svg id="figDense" class="net" viewBox="0 0 516 518" role="img"
+  <figure>
+    <svg id="figDense" class="net" viewBox="0 0 940 518" role="img"
          aria-label="Network of all constructs used in five or more papers"></svg>
     <figcaption><span class="fn">Figure 6</span><b>The 1,081 constructs that five or more papers use, and how they travel.</b>
     <span class="nt">Note. A line joins two constructs that at least two papers assert together.
@@ -582,7 +582,7 @@ function drawMap(){
   if(!GRAPH || !GRAPH.map){ staleData(svg, "the map coordinates"); return; }
   clear(svg);
   const M = GRAPH.map;
-  const TOP = 70;                       // a clear strip for the key
+  const TOP = 24;                       // room for the topmost labels
   svg.setAttribute("viewBox", "0 0 " + M.w + " " + (M.h + TOP));
   const at = new Map();
   for(const [i,x,y,p,c] of M.nodes) at.set(i, {i,x:x,y:y+TOP,p,c});
@@ -621,15 +621,17 @@ function drawMap(){
     const top=Math.min(...g.map(d=>d.y));
     lab.push({x:cx,y:top-9,r:2,label:tc(rec.n),kind:"paper"});
   }
+  /* the drawing crowds the top left, so the key sits in the clear corner */
+  const KH=3*15+11, KX=M.w-198, KY=(M.h+TOP)-KH+6;
   drawKey(svg, [
     {fill:"var(--s1)", text:"used in five or more papers"},
     {fill:"var(--paper)", stroke:"var(--ink-3)", sw:1, r:3.5, text:"used in fewer"},
     {line:true, color:"var(--rule)", w:1.6, text:"appear together far above chance"}],
-    14, 18);
+    KX, KY);
   const obst=[...at.values()].map(d=>({x:d.x,y:d.y,
     r:Math.max(1.9,Math.min(7,1.6+Math.log10(Math.max(d.p,1))*3.1))}));
   placeLabels(svg, obst, lab, M.w, M.h+TOP, false,
-              [{x0:0,y0:0,x1:206,y1:TOP-4}]);
+              [{x0:KX-10,y0:KY-15,x1:KX+190,y1:KY+KH-10}]);
   const est=[...at.values()].filter(d=>d.p>=5).length;
   const note=document.getElementById("mapNote");
   if(note) note.innerHTML =
@@ -655,9 +657,13 @@ function drawDense(){
   if(!GRAPH || !GRAPH.dense){ staleData(svg, "the field network"); return; }
   clear(svg);
   const D=GRAPH.dense;
-  svg.setAttribute("viewBox","0 0 "+(D.w+24)+" "+(D.h+24));
+  /* the layout settles into a disc; widening it fills the panel the page has
+     room for, and since it only moves points further apart in x it cannot
+     push two of them onto each other */
+  const WIDE=1.86;
+  svg.setAttribute("viewBox","0 0 "+(D.w*WIDE+24)+" "+(D.h+24));
   const at=new Map();
-  for(const [i,x,y,p,deg,span] of D.nodes) at.set(i,{i,x:x+12,y:y+12,p,deg,span});
+  for(const [i,x,y,p,deg,span] of D.nodes) at.set(i,{i,x:x*WIDE+12,y:y+12,p,deg,span});
   const byIdx=D.nodes.map(n=>at.get(n[0]));
   for(const [a,b,n] of D.edges){
     const p=byIdx[a], q=byIdx[b];
@@ -686,12 +692,12 @@ function drawDense(){
     {fill:"var(--s2)", text:"the most connected constructs"},
     {fill:"var(--s1)", text:"the rest"},
     {line:true, color:"var(--rule)", w:1.5, text:"two or more papers assert both"}], 14, 22);
-  placeLabels(svg, [], top, D.w+24, D.h+24, true,
+  placeLabels(svg, [], top, D.w*WIDE+24, D.h+24, true,
     [{x0:0,y0:0,x1:200,y1:72}]);
   const note=document.getElementById("denseNote");
   if(note) note.innerHTML =
     "Every construct here is used in at least five papers, and "+fmt(D.n_edges_all)+
-    " pairs of them appear together in at least one paper. The sixteen names shown are the "+
+    " pairs of them appear together in at least one paper. The eleven names shown are the "+
     "constructs that keep company with the most others, which is one way of asking which "+
     "constructs the field cannot write a paper without.";
 }
@@ -774,13 +780,17 @@ function drawBridgeExample(){
   el("circle",{cx:cx,cy:cy,r:9,fill:"var(--s2)"},svg);
   /* the construct at the centre, then each literature named at its own spoke */
   const lab=[{x:cx,y:cy,r:9,label:tc(B.name),kind:"new"}];
+  /* anchor each name on the points it names, so a leader line that is needed
+     runs to the node rather than to a spot beside it */
   B.groups.forEach((g,i)=>{
-    const ang=-Math.PI/2 + 2*Math.PI*i/n;
-    lab.push({x:cx+Math.cos(ang)*(R+16), y:cy+Math.sin(ang)*(R+16), r:1,
-              label:tc(g.anchor), kind:"paper"});
+    const own=pts.filter(p=>p.anchor===g.anchor);
+    if(!own.length) return;
+    const mx=own.reduce((s,p)=>s+p.x,0)/own.length;
+    const my=own.reduce((s,p)=>s+p.y,0)/own.length;
+    lab.push({x:mx, y:my, r:6, label:tc(g.anchor), kind:"paper"});
   });
-  placeLabels(svg, pts.map(p=>({x:p.x,y:p.y,r:5})), lab, W, H, false,
-              [{x0:0,y0:0,x1:W,y1:22}]);
+  placeLabels(svg, pts.map(p=>({x:p.x,y:p.y,r:5})).concat([{x:cx,y:cy,r:11}]),
+              lab, W, H, false, [{x0:0,y0:0,x1:W,y1:22}]);
   const note=document.getElementById("bridgeNote");
   if(note) note.innerHTML =
     "<em>"+esc(tc(B.name))+"</em> appears in "+B.papers+" papers and keeps company with "+
