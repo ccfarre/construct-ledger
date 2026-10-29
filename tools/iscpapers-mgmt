@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""iscpapers-mgmt: one record per extracted paper, for placing a manuscript
+against the field it is written into.
+
+The site already ships what each construct is. This ships what each paper used,
+which is what lets a browser recompute the field's own co-occurrence structure
+and ask where a new manuscript sits in it: how conventional its pairings are,
+which of its pairings nobody has made before, and which published papers draw on
+the same constructs.
+
+Construct ids are the ones the site uses. They come from sorting the canon by
+mention count, which is what build-assets-mgmt does, so the two files line up.
+
+Reads only. No API calls, no cost.
+
+    iscpapers-mgmt --canon canon_mgmt_t84.jsonl --ledger ledger_mgmt_v2.jsonl \\
+        --corpus corpus_mgmt.jsonl --out site/data/mgmt
+"""
+import argparse, collections, hashlib, json, os, sys
+
+
+def log(s): print(s, file=sys.stderr)
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="iscpapers-mgmt")
+    ap.add_argument("--canon", required=True)
+    ap.add_argument("--ledger", required=True)
+    ap.add_argument("--corpus", required=True, help="for title, journal and year only")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--title-chars", type=int, default=140)
+    a = ap.parse_args()
+
+    meta = {}
+    for line in open(a.corpus, encoding="utf-8"):
+        if not line.strip():
+            continue
+        r = json.loads(line)
+        meta[r["doc_id"]] = r
+    log("corpus records read: %d" % len(meta))
+
+    C = [json.loads(l) for l in open(a.canon, encoding="utf-8") if l.strip()]
+    C.sort(key=lambda c: -c["n_mentions"])          # the order the site indexes by
+    at = {}
+    for i, c in enumerate(C):
+        for h in (c.get("form_hashes") or []):
+            at[h] = i
+    log("canonical constructs: %d, form hashes: %d" % (len(C), len(at)))
+
+    rows, unresolved, n_men = [], 0, 0
+    journals = collections.Counter()
+    for line in open(a.ledger, encoding="utf-8"):
+        if not line.strip():
+            continue
+        r = json.loads(line)
+        ids = set()
+        for c in ((r.get("result") or {}).get("constructs") or []):
+            n_men += 1
+            text = "%s: %s" % (c.get("name") or "", c.get("definition") or "")
+            h = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+            i = at.get(h)
+            if i is None:
+                unresolved += 1
+            else:
+                ids.add(i)
+        if not ids:
+            continue
+        m = meta.get(r["doc_id"], {})
+        j = r.get("journal") or m.get("journal") or ""
+        journals[j] += 1
+        t = (m.get("title") or "").strip()
+        if len(t) > a.title_chars:
+            t = t[:a.title_chars - 1].rstrip() + "…"
+        rows.append([r.get("year") or m.get("year") or 0, j, t, r["doc_id"], sorted(ids)])
+
+    jlist = [j for j, _ in journals.most_common()]
+    jat = {j: i for i, j in enumerate(jlist)}
+    out_rows = [[y, jat.get(j, -1), t, d, ids] for (y, j, t, d, ids) in rows]
+    out_rows.sort(key=lambda r: (r[0], r[3]))
+
+    sizes = collections.Counter(len(r[4]) for r in out_rows)
+    pairs = sum(len(r[4]) * (len(r[4]) - 1) // 2 for r in out_rows)
+    titled = sum(1 for r in out_rows if r[2])
+
+    os.makedirs(a.out, exist_ok=True)
+    doc = {"version": 1, "journals": jlist, "n_constructs": len(C), "rows": out_rows}
+    path = os.path.join(a.out, "papers.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(doc, f, separators=(",", ":"), ensure_ascii=False)
+
+    log("")
+    log("  papers with at least one construct   %d" % len(out_rows))
+    log("  construct mentions read              %d" % n_men)
+    log("  mentions with no canonical form      %d" % unresolved)
+    log("  titles carried                       %d" % titled)
+    log("  constructs per paper, median         %d"
+        % sorted(len(r[4]) for r in out_rows)[len(out_rows) // 2])
+    log("  within-paper construct pairs         %d" % pairs)
+    log("  wrote                                %s (%.1f MB)"
+        % (path, os.path.getsize(path) / 1e6))
+
+
+if __name__ == "__main__":
+    main()

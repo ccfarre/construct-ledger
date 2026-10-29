@@ -24,7 +24,7 @@ spans were found verbatim in their own abstract**. That check is mechanical, it 
 it runs in seconds, and anyone can re-run it. An instrument that reports its own
 hallucination rate is a different object from one that asks to be taken on faith.
 
-The site lets a reader do six things:
+The site lets a reader do seven things:
 
 1. **Read the ledger's figures**, all drawn from the shipped data rather than hand-entered.
 2. **Paste a working paper** and see two things: the constructs it appears to propose,
@@ -35,13 +35,19 @@ The site lets a reader do six things:
    ties among them, and the ties observed inside the manuscript itself, which is what
    gives a construct the corpus has never seen a position among constructs it has.
    Browsing a construct draws the company it keeps.
-4. **Work out where to take it.** From the same reading, the site assembles the names the
+4. **See where the manuscript sits.** The site rebuilds the field's own pairing structure
+   in the browser from the shipped per-paper records, and reports which of the manuscript's
+   construct pairings the field has already made, which it has never made, and which
+   published papers are built from the same constructs. Across all 585,903 pairs of
+   constructs used in five or more papers, only 1.4 per cent have ever shared an abstract,
+   so a pairing is rare by default and the ones a manuscript makes are worth naming.
+5. **Work out where to take it.** From the same reading, the site assembles the names the
    corpus vocabulary allows and marks which are already taken, the definitions the nearest
    constructs with the same head noun were given in print, the constructs that travel with
    the ones the paper uses and are missing from it, and the borrowed constructs whose
    published definitions agree least.
-5. **Browse 23,522 constructs**, with every name that was merged into each one.
-6. **Check the grounding** for any construct, with the span highlighted in its context and
+6. **Browse 23,522 constructs**, with every name that was merged into each one.
+7. **Check the grounding** for any construct, with the span highlighted in its context and
    a DOI to the source.
 
 ## The corpus
@@ -118,6 +124,7 @@ tools/iscledger-mgmt      put the jsonl ledger into the sqlite shape iscgeo read
 tools/iscembed-mgmt       embed name-and-definition strings (resumable, retrying)
 tools/iscgeo              calibrate the threshold and merge into canonical constructs
 tools/build-assets-mgmt   build the site data from the canonical ledger
+tools/iscpapers-mgmt      one record per extracted paper, for the pairing analysis
 ```
 
 Every cost-bearing step prints an estimate and waits for `--go`, meters the real spend as
@@ -144,7 +151,13 @@ data/mgmt/constructs.json    one compact record per construct, for search and br
 data/mgmt/figures.json       precomputed series behind the figures
 data/mgmt/graph.json         co-occurrence ties, neighbourhoods, head-noun families
 data/mgmt/detail/NNNN.json   definitions and provenance, 100 constructs per file
+data/mgmt/papers.json        one record per paper: year, journal, title, DOI, constructs
 ```
+
+`papers.json` is the file that lets the browser recompute the corpus structure rather than
+trust a precomputed summary. It reproduces the shipped numbers exactly: construct paper
+counts match `constructs.json` for every construct, and co-occurrence counts rebuilt from
+it match all 899 ties in `graph.json`.
 
 **Abstracts are not redistributed.** Each provenance record ships the span, 120 characters
 of context either side, and the DOI. That is what verification needs; the corpus itself

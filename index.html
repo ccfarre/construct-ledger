@@ -340,7 +340,7 @@ em{font-style:italic}
 const DATA = ["data/mgmt/", "data/", "./"];
 /* bumped whenever the data folder is rebuilt, so a browser holding an older
    copy of these files fetches the new ones instead of serving its cache */
-const BUILD = "6";
+const BUILD = "7";
 async function grab(name){
   let last;
   for (const base of DATA){
@@ -932,9 +932,9 @@ async function showDetail(i){
 }
 
 /* A key drawn inside the figure, so the picture explains itself. */
-function drawKey(svg, items, x, y){
+function drawKey(svg, items, x, y, width){
   const g=el("g",{},svg);
-  el("rect",{x:x-8,y:y-13,width:192,height:items.length*15+11,rx:2,
+  el("rect",{x:x-8,y:y-13,width:width||192,height:items.length*15+11,rx:2,
              fill:"var(--panel)",stroke:"var(--rule)","stroke-width":1,
              "fill-opacity":0.94},g);
   items.forEach((it,i)=>{
@@ -1261,6 +1261,243 @@ function textTies(text, terms){
       }
   }
   return {pairs, seen};
+}
+
+/* -------------------------------------------- where a manuscript sits
+   The site ships one record per extracted paper: its year, its journal and
+   the constructs it asserted. That is enough for the browser to rebuild the
+   field's own pairing structure and ask which of a manuscript's pairings the
+   field has already made. Every number below is recomputed here from that
+   file, so none of it has to be taken on trust. */
+
+let PAPERS=null, CORP=null, BASE=null;
+const PKEY=(a,b)=> a<b ? a*100000+b : b*100000+a;
+
+async function loadPapers(){
+  if(!PAPERS) PAPERS = await grab("papers.json");
+  return PAPERS;
+}
+
+function corpusStructure(){
+  if(CORP) return CORP;
+  const pc=new Map(), pair=new Map(), rows=PAPERS.rows, N=rows.length;
+  for(const r of rows){
+    const ids=r[4];
+    for(const i of ids) pc.set(i,(pc.get(i)||0)+1);
+    for(let x=0;x<ids.length;x++)
+      for(let y=x+1;y<ids.length;y++){
+        const k=PKEY(ids[x],ids[y]);
+        pair.set(k,(pair.get(k)||0)+1);
+      }
+  }
+  CORP={pc, pair, N};
+  return CORP;
+}
+
+/* How often has the field already made a pairing of a given weight? Two
+   constructs that each appear in two hundred papers have many chances to meet;
+   two that appear in six have almost none. The base rate below is computed
+   over every pair of constructs used in five or more papers, which is the
+   only fair thing to read a manuscript's own pairings against. */
+function baseRate(){
+  if(BASE) return BASE;
+  const S=corpusStructure();
+  const est=IDX.filter(r=>r.p>=5).map(r=>r.i);
+  const bins=new Map();
+  const put=(e,made)=>{
+    const b=Math.round(Math.log2(Math.max(e,1e-4))*2)/2;
+    if(!bins.has(b)) bins.set(b,{b, n:0, made:0});
+    const o=bins.get(b); o.n++; if(made) o.made++;
+  };
+  for(let x=0;x<est.length;x++){
+    const i=est[x], pi=S.pc.get(i)||0;
+    for(let y=x+1;y<est.length;y++){
+      const j=est[y];
+      put(pi*(S.pc.get(j)||0)/S.N, (S.pair.get(PKEY(i,j))||0)>0);
+    }
+  }
+  const pts=[...bins.values()].filter(d=>d.n>=40).sort((a,b)=>a.b-b.b);
+  for(const d of pts) d.rate=d.made/d.n;
+  const all=[...bins.values()].reduce((a,d)=>({n:a.n+d.n, made:a.made+d.made}),{n:0,made:0});
+  BASE={pts, overall:all.made/all.n, pairs:all.n, constructs:est.length};
+  return BASE;
+}
+function rateAt(e){
+  const B=baseRate(), b=Math.log2(Math.max(e,1e-4));
+  let best=null;
+  for(const d of B.pts) if(!best || Math.abs(d.b-b)<Math.abs(best.b-b)) best=d;
+  return best ? best.rate : B.overall;
+}
+
+/* the manuscript's own pairings, each with the weight of the pair and the
+   number of papers that have already made it */
+function pairings(ids){
+  const S=corpusStructure(), out=[];
+  for(let x=0;x<ids.length;x++)
+    for(let y=x+1;y<ids.length;y++){
+      const i=ids[x], j=ids[y];
+      const pi=S.pc.get(i)||0, pj=S.pc.get(j)||0;
+      if(!pi || !pj) continue;
+      out.push({i, j, pi, pj, exp:pi*pj/S.N, obs:S.pair.get(PKEY(i,j))||0});
+    }
+  out.sort((a,b)=>b.exp-a.exp);
+  return out;
+}
+
+/* published papers that draw on the same constructs, rare ones weighing more */
+function nearestPapers(ids, k){
+  const S=corpusStructure(), N=S.N;
+  const w=new Map();
+  for(const i of ids) w.set(i, Math.log(N/Math.max(S.pc.get(i)||1,1)));
+  let norm=0; for(const v of w.values()) norm+=v*v;
+  norm=Math.sqrt(norm)||1;
+  const out=[];
+  for(const r of PAPERS.rows){
+    let dot=0, len=0, shared=null;
+    for(const j of r[4]){
+      const u=Math.log(N/Math.max(S.pc.get(j)||1,1));
+      len+=u*u;
+      if(w.has(j)){ dot+=w.get(j)*u; (shared||(shared=[])).push(j); }
+    }
+    if(!shared || shared.length<2) continue;
+    out.push({r, s:dot/(norm*Math.sqrt(len||1)), shared});
+  }
+  out.sort((a,b)=>b.s-a.s);
+  return out.slice(0,k);
+}
+
+function drawPlace(svg, prs){
+  const B=baseRate();
+  clear(svg);
+  const vb=svg.getAttribute("viewBox").split(" ").map(Number), W=vb[2], H=vb[3];
+  const L=62, R=W-18, T=24, Bo=H-46;
+  const xs=B.pts.map(d=>d.b).concat(prs.map(p=>Math.log2(Math.max(p.exp,1e-4))));
+  const lo=Math.min(...xs), hi=Math.max(...xs);
+  const X=v=>L+(Math.max(lo,Math.min(hi,v))-lo)/(hi-lo||1)*(R-L);
+  const Y=v=>Bo-v*(Bo-T);
+  el("line",{x1:L,x2:R,y1:Bo,y2:Bo,class:"ax"},svg);
+  el("line",{x1:L,x2:L,y1:T,y2:Bo,class:"ax"},svg);
+  for(const v of [0,0.25,0.5,0.75,1]){
+    el("line",{x1:L-4,x2:L,y1:Y(v),y2:Y(v),class:"ax"},svg);
+    txt(svg,L-8,Y(v)+3.5,Math.round(v*100)+"%","al","end");
+  }
+  for(let b=Math.ceil(lo); b<=hi; b+=1){
+    const e=Math.pow(2,b);
+    if(e<0.02) continue;
+    el("line",{x1:X(b),x2:X(b),y1:Bo,y2:Bo+4,class:"ax"},svg);
+    txt(svg,X(b),Bo+16, e>=1?String(Math.round(e)):e.toFixed(2).replace(/0$/,""),
+        "al","middle");
+  }
+  txt(svg,(L+R)/2,H-8,"papers that would share both constructs by chance","al","middle");
+  const yl=txt(svg,0,0,"share of pairings already made","al","middle");
+  yl.setAttribute("transform","translate(14,"+((T+Bo)/2)+") rotate(-90)");
+  /* the base rate */
+  let d="";
+  B.pts.forEach((p,i)=>{ d+=(i?" L":"M")+X(p.b).toFixed(1)+" "+Y(p.rate).toFixed(1); });
+  el("path",{d:d,fill:"none",stroke:"var(--s1)","stroke-width":1.8},svg);
+  for(const p of B.pts)
+    el("circle",{cx:X(p.b),cy:Y(p.rate),r:2.2,fill:"var(--s1)"},svg);
+  /* this manuscript's pairings, made or not */
+  for(const p of prs){
+    const x=X(Math.log2(Math.max(p.exp,1e-4))), y=p.obs>0?Y(1):Y(0);
+    const c=el("circle",{cx:x,cy:y,r:p.obs>0?4.6:4.6,
+      fill:p.obs>0?"var(--s2)":"var(--paper)",stroke:"var(--s2)",
+      "stroke-width":p.obs>0?0:1.8},svg);
+    c.appendChild(Object.assign(document.createElementNS(SVGNS,"title"),
+      {textContent:tc((BYI.get(p.i)||{n:"?"}).n)+" with "+tc((BYI.get(p.j)||{n:"?"}).n)+
+        ": "+(p.obs?p.obs+" paper"+(p.obs===1?"":"s"):"no paper")+" so far"}));
+  }
+  drawKey(svg,[
+    {fill:"var(--s1)", r:3, text:"the field at that weight"},
+    {fill:"var(--s2)", r:4.2, text:"a pairing your text makes"},
+    {fill:"var(--paper)", stroke:"var(--s2)", sw:1.8, r:4.2, text:"one the field has not"}],
+    L+14, T+10, 186);
+}
+
+async function whereItSits(borrowed){
+  await loadPapers();
+  const S=corpusStructure(), B=baseRate();
+  const ids=[...new Set(borrowed.map(b=>b.rec.i))];
+  const prs=pairings(ids);
+  const P=[];
+  P.push('<h2>Where this paper sits in the field</h2>');
+  if(prs.length<3){
+    P.push('<p class="empty">Three constructs the corpus already knows are needed to place a '+
+      'manuscript against it, and this text has '+ids.length+'.</p>');
+    return P.join("");
+  }
+  const made=prs.filter(p=>p.obs>0), never=prs.filter(p=>p.obs===0);
+  const trodden=prs.filter(p=>p.obs>=5);
+  let expected=0; for(const p of prs) expected+=rateAt(p.exp);
+  P.push('<p class="note">A pairing is two constructs asserted in the same abstract. This '+
+    'manuscript puts '+ids.length+' constructs the ledger knows into '+prs.length+' pairings. '+
+    'The field has already made '+made.length+' of them, '+trodden.length+' in five or more '+
+    'papers, and has never made the other '+never.length+'. Across every pair of constructs '+
+    'used in five or more papers, '+fmt(B.pairs)+' pairs in all, only '+
+    (B.overall*100).toFixed(1)+' per cent have ever shared an abstract, so pairings are rare '+
+    'by default. Weighting by how widely each of your constructs is used, '+
+    expected.toFixed(1)+' of your '+prs.length+' pairings would be expected to exist already.</p>');
+  P.push('<figure style="margin-top:16px">'+
+    '<svg id="figPlace" class="net" viewBox="0 0 760 400" role="img" '+
+    'aria-label="This manuscript’s pairings against the rate at which the field makes them">'+
+    '</svg>'+
+    '<figcaption><span class="fn">Figure</span><b>Pairings this manuscript makes, against how '+
+    'often the field makes pairings that likely.</b>'+
+    '<span class="nt">Note. The horizontal axis is how many papers would assert both '+
+    'constructs if the two were used independently of one another, which is the chance each '+
+    'pairing had of already existing. The line is the share of all pairs of established '+
+    'constructs at that weight which some paper has in fact asserted together. Each circle is '+
+    'one pairing in your text, which sits at the top when the field has made it and on the '+
+    'axis when it has not. Hover for the two constructs.</span></figcaption></figure>');
+  if(never.length){
+    P.push('<h3 class="sec">Pairings no published paper has made</h3>');
+    P.push('<p class="note" style="margin:0 0 8px">Ordered by the chance they had of '+
+      'existing already. The ones at the top are two well used constructs that the field has '+
+      'kept apart, which is where a reader will look for the argument that joins them.</p>');
+    P.push('<table><thead><tr><th>Construct</th><th>With</th><th class="num">Papers</th>'+
+      '<th class="num">Papers</th><th class="num">Expected</th></tr></thead><tbody>');
+    for(const f of never.slice(0,8)){
+      const a=BYI.get(f.i)||{n:"?"}, b=BYI.get(f.j)||{n:"?"};
+      P.push('<tr data-i="'+f.i+'"><td>'+esc(tc(a.n))+'</td><td>'+esc(tc(b.n))+
+        '</td><td class="num">'+f.pi+'</td><td class="num">'+f.pj+
+        '</td><td class="num">'+f.exp.toFixed(1)+'</td></tr>');
+    }
+    P.push('</tbody></table>');
+  }
+  if(trodden.length){
+    P.push('<h3 class="sec">Pairings the field has settled</h3>');
+    P.push('<p class="note" style="margin:0 0 8px">Five or more papers assert both. These are '+
+      'the parts of the argument a reader will take as given, which is useful to know when '+
+      'deciding what the paper has to spend its space defending.</p>');
+    P.push('<table><thead><tr><th>Construct</th><th>With</th><th class="num">Papers together'+
+      '</th></tr></thead><tbody>');
+    for(const f of trodden.slice(0,8)){
+      const a=BYI.get(f.i)||{n:"?"}, b=BYI.get(f.j)||{n:"?"};
+      P.push('<tr data-i="'+f.i+'"><td>'+esc(tc(a.n))+'</td><td>'+esc(tc(b.n))+
+        '</td><td class="num">'+f.obs+'</td></tr>');
+    }
+    P.push('</tbody></table>');
+  }
+  const near=nearestPapers(ids, 8);
+  if(near.length){
+    P.push('<h3 class="sec">Published papers built from the same constructs</h3>');
+    P.push('<p class="note" style="margin:0 0 8px">Ranked by how far their construct sets '+
+      'overlap with this one, with a construct few papers use counting for more than one '+
+      'everybody uses. The shared constructs are listed with each entry, so the ranking can '+
+      'be checked line by line.</p>');
+    for(const n of near){
+      const y=n.r[0], j=n.r[1], t=n.r[2], doi=n.r[3];
+      P.push('<div class="defn" style="margin:12px 0">'+
+        (t?esc(t):'<em>no title deposited</em>')+
+        '<div class="m">'+esc(PAPERS.journals[j]||"")+' &middot; '+y+' &middot; '+
+        '<a href="https://doi.org/'+encodeURIComponent(doi)+'" target="_blank" rel="noopener">'+
+        esc(doi)+'</a><br>shares '+
+        n.shared.slice(0,6).map(i=>'<em>'+esc(tc((BYI.get(i)||{n:"?"}).n))+'</em>').join(", ")+
+        (n.shared.length>6?', and '+(n.shared.length-6)+' more':'')+
+        '</div></div>');
+    }
+  }
+  return P.join("");
 }
 
 /* ---------------------------------------------------- taking it further
@@ -1678,6 +1915,7 @@ async function runCheck(){
         (dropped.length>10?', and others':'')+'.' : '')+'</p>');
   }
 
+  P.push('<div id="place"></div>');
   P.push('<div id="further"></div>');
 
   out.innerHTML=P.join("");
@@ -1692,6 +1930,18 @@ async function runCheck(){
   wire(out);
   /* the further reading needs the definition shards, so it arrives after the
      rest of the page rather than holding it up */
+  const pbox=document.getElementById("place");
+  if(pbox && borrowed.length>=3){
+    pbox.innerHTML='<p class="note" style="margin-top:26px">Rebuilding the field\u2019s pairings&hellip;</p>';
+    whereItSits(borrowed).then(html=>{
+      pbox.innerHTML=html; wire(pbox);
+      const sv=document.getElementById("figPlace");
+      if(sv){
+        const pids=[...new Set(borrowed.map(b=>b.rec.i))];
+        drawPlace(sv, pairings(pids));
+      }
+    }).catch(e=>{ pbox.innerHTML=''; });
+  } else if(pbox) pbox.innerHTML='';
   const fbox=document.getElementById("further");
   if(fbox){
     fbox.innerHTML='<p class="note" style="margin-top:26px">Reading the definitions&hellip;</p>';
