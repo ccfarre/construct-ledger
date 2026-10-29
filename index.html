@@ -6,16 +6,16 @@
 <title>Construct Ledger</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=Source+Code+Pro:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{
   color-scheme: light;
   --paper:#ffffff; --panel:#ffffff; --wash:#f4f5f6; --rule:#d9dcde; --rule-soft:#e8eaec;
   --ink:#14181a; --ink-2:#4b545a; --ink-3:#7d868b;
   --s1:#00897b; --s2:#c1440e; --mark:#ffeec2;
-  --serif:"Newsreader","Iowan Old Style",Palatino,Georgia,serif;
-  --sans:"IBM Plex Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
-  --mono:"IBM Plex Mono","SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+  --serif:"Source Sans 3","Source Sans Pro",-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --sans:"Source Sans 3","Source Sans Pro",-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:"Source Code Pro","IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
@@ -34,12 +34,12 @@
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--paper);color:var(--ink);
-  font-family:var(--serif);font-size:16px;line-height:1.6;position:relative;
+  font-family:var(--sans);font-size:15.5px;line-height:1.62;position:relative;
   -webkit-font-smoothing:antialiased;font-kerning:normal}
-.wrap{max-width:1060px;margin:0 auto;padding:0 28px 96px}
+.wrap{max-width:900px;margin:0 auto;padding:0 26px 90px}
 header{padding:48px 0 0}
-h1{font-size:32px;line-height:1.15;margin:0 0 10px;font-weight:600;letter-spacing:-0.012em}
-.sub{color:var(--ink-2);font-size:17px;margin:0;max-width:none;line-height:1.5}
+h1{font-size:28px;line-height:1.2;margin:0 0 10px;font-weight:700;letter-spacing:-0.01em}
+.sub{color:var(--ink-2);font-size:16px;margin:0;max-width:none;line-height:1.55}
 .corpus{font-family:var(--sans);font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;
   color:var(--ink-3);margin:18px 0 0;padding-top:14px;border-top:1px solid var(--rule)}
 nav{display:flex;gap:26px;flex-wrap:wrap;margin:26px 0 40px;
@@ -50,48 +50,50 @@ nav button{appearance:none;background:none;border:0;border-bottom:1.5px solid tr
 nav button:hover{color:var(--ink)}
 nav button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--s1)}
 .panel[hidden]{display:none}
-h2{font-size:21px;margin:52px 0 6px;font-weight:600;letter-spacing:-0.008em}
+h2{font-size:19px;margin:44px 0 6px;font-weight:700;letter-spacing:-0.005em;
+  padding-bottom:5px;border-bottom:1px solid var(--rule)}
 h2:first-child{margin-top:0}
 h3.sec{font-family:var(--sans);font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;
   color:var(--ink-3);font-weight:600;margin:26px 0 8px}
-.note{color:var(--ink-2);font-size:15px;margin:6px 0 20px;max-width:none}
-.lede{font-size:16.5px;color:var(--ink-2);max-width:none;margin:6px 0 26px}
+.note{color:var(--ink-2);font-size:14.5px;margin:6px 0 18px;max-width:none}
+.lede{font-size:15.5px;color:var(--ink-2);max-width:none;margin:6px 0 22px}
 
 /* key figures: a rule-separated row, not cards */
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
   border-top:1px solid var(--ink);border-bottom:1px solid var(--rule);margin:26px 0 10px}
 .tile{padding:14px 18px 15px 0}
 .tile+.tile{border-left:1px solid var(--rule-soft);padding-left:18px}
-.tile .v{font-size:26px;font-weight:600;letter-spacing:-0.02em;font-variant-numeric:tabular-nums;
+.tile .v{font-size:23px;font-weight:700;letter-spacing:-0.02em;font-variant-numeric:tabular-nums;
   line-height:1.1}
 .tile .k{font-family:var(--sans);font-size:12px;color:var(--ink-3);margin-top:7px;
   line-height:1.4;max-width:28ch}
 
 /* figures, journal style */
-figure{margin:26px 0 34px;padding:0}
-figcaption{font-size:14px;color:var(--ink-2);margin-top:14px;max-width:none;line-height:1.5;
-  padding-top:10px;border-top:1px solid var(--rule)}
+figure{margin:20px 0 30px;padding:0;max-width:780px}
+figure.tall{max-width:560px}
+figcaption{font-size:13.5px;color:var(--ink-2);margin-top:10px;max-width:none;line-height:1.5;
+  padding-top:8px;border-top:1px solid var(--rule-soft)}
 figcaption .fn{font-family:var(--sans);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
   color:var(--ink-3);font-weight:600}
 figcaption .fn::after{content:'\00a0\00a0'}
 figcaption b{color:var(--ink);font-weight:600}
-figcaption .nt{display:block;margin-top:6px;font-size:13.5px;color:var(--ink-3)}
-.fig-row{display:grid;grid-template-columns:1fr 1fr;gap:34px}
+figcaption .nt{display:block;margin-top:5px;font-size:13px;color:var(--ink-3)}
+.fig-row{display:grid;grid-template-columns:1fr 1fr;gap:28px;max-width:780px}
 @media (max-width:720px){.fig-row{grid-template-columns:1fr}.tile+.tile{border-left:0}}
 svg{display:block;width:100%;height:auto;overflow:visible}
-figure svg.net{background:var(--panel);border:1px solid var(--rule-soft);border-radius:2px}
+figure svg.net{background:#ffffff}
 svg.net{overflow:hidden}
 .ax{stroke:var(--ink-3);stroke-width:1;shape-rendering:crispEdges}
 .tkm{stroke:var(--ink-3);stroke-width:1;shape-rendering:crispEdges}
 .gr{stroke:var(--rule);stroke-width:1;shape-rendering:crispEdges}
-.tk{fill:var(--ink-3);font-size:10px;font-family:var(--sans);font-variant-numeric:tabular-nums}
-.al{fill:var(--ink-3);font-size:10.5px;font-family:var(--sans);font-style:italic}
-.dl{font-size:10.5px;font-family:var(--sans);font-weight:600;
+.tk{fill:var(--ink-3);font-size:9.5px;font-family:var(--sans);font-variant-numeric:tabular-nums}
+.al{fill:var(--ink-3);font-size:10px;font-family:var(--sans);font-style:italic}
+.dl{font-size:9.5px;font-family:var(--sans);font-weight:600;
   font-variant-numeric:tabular-nums}
 .sl{font-size:11px;font-family:var(--sans);font-weight:600}
-.kl{font-size:10.5px;font-family:var(--sans);fill:var(--ink-2)}
+.kl{font-size:9.5px;font-family:var(--sans);fill:var(--ink-2)}
 .an{font-size:11px;font-family:var(--sans);font-style:italic;fill:var(--ink-3)}
-.nl{font-size:10.5px;font-family:var(--sans);font-weight:600;paint-order:stroke;
+.nl{font-size:9.5px;font-family:var(--sans);font-weight:600;paint-order:stroke;
   stroke:var(--panel);stroke-width:3.5px;stroke-linejoin:round}
 .pl{fill:var(--ink);font-size:12px;font-family:var(--sans);font-weight:700}
 
@@ -100,8 +102,8 @@ input[type=search],input[type=text],textarea,select{
   font-family:var(--sans);font-size:14px;color:var(--ink);background:transparent;
   border:0;border-bottom:1px solid var(--ink-3);border-radius:0;padding:8px 2px;width:100%}
 input:focus,textarea:focus,select:focus{outline:0;border-bottom-color:var(--s1)}
-textarea{min-height:170px;resize:vertical;border:1px solid var(--rule);padding:14px;
-  font-family:var(--serif);font-size:15px;line-height:1.6;background:var(--panel)}
+textarea{min-height:170px;resize:vertical;border:1px solid var(--rule);padding:13px;
+  font-family:var(--sans);font-size:14.5px;line-height:1.6;background:#fff}
 button.act{appearance:none;font-family:var(--sans);font-size:11.5px;letter-spacing:.08em;
   text-transform:uppercase;font-weight:600;cursor:pointer;background:var(--ink);
   color:var(--paper);border:1px solid var(--ink);border-radius:0;padding:9px 16px}
@@ -114,7 +116,7 @@ button.act:hover{opacity:.85}
   color:var(--ink-3);display:block;margin-bottom:3px}
 
 /* tables */
-table{border-collapse:collapse;width:100%;font-size:14.5px}
+table{border-collapse:collapse;width:100%;font-size:14px}
 th,td{text-align:left;padding:8px 14px 8px 0;border-bottom:1px solid var(--rule-soft);
   vertical-align:baseline}
 th+th,td+td{padding-left:16px}
@@ -127,7 +129,7 @@ tbody tr:hover td{background:var(--wash)}
 
 /* detail */
 .detail{border-top:2px solid var(--ink);padding-top:22px;margin-top:34px}
-.detail h3{font-size:24px;margin:0 0 4px;font-weight:600;letter-spacing:-0.01em}
+.detail h3{font-size:21px;margin:0 0 4px;font-weight:700;letter-spacing:-0.01em}
 .meta{font-family:var(--sans);font-size:11.5px;color:var(--ink-3);letter-spacing:.03em;
   margin:0 0 20px}
 .pill{display:inline-block;font-family:var(--sans);font-size:10.5px;padding:1px 0;
@@ -135,7 +137,7 @@ tbody tr:hover td{background:var(--wash)}
 .defn{padding:0 0 0 16px;margin:14px 0;border-left:1px solid var(--rule);font-size:15.5px}
 .defn .m{font-family:var(--sans);font-size:11px;color:var(--ink-3);margin-top:5px;
   letter-spacing:.02em}
-.prov{padding:0 0 0 16px;border-left:2px solid var(--rule);margin:14px 0;font-size:14.5px;
+.prov{padding:10px 12px;background:var(--wash);border-radius:2px;margin:12px 0;font-size:14px;
   line-height:1.65;color:var(--ink-2)}
 .prov mark{background:var(--mark);color:var(--ink);padding:0 2px}
 .prov .m{font-family:var(--sans);font-size:11px;color:var(--ink-3);margin-top:6px;
@@ -248,34 +250,33 @@ em{font-style:italic}
 
   <div class="tiles" id="tiles2"></div>
 
-  <h2>The map of the construct space</h2>
-  <figure>
-    <svg id="figMap" class="net" viewBox="0 0 1491 572" role="img"
-         aria-label="Map of the constructs that co-occur across the corpus"></svg>
-    <figcaption><span class="fn">Figure 6</span><b>The constructs of management theory, as the
-    corpus uses them.</b>
-    <span class="nt">Note. Every construct that shares a paper with another construct far more
-    often than their separate frequencies predict. Each island is a neighbourhood of constructs
-    that travel together, and the islands were found by the ties rather than imposed. Point size
-    follows how many papers use the construct. Hover any point for its name; click to open it.
-    Constructs with no such tie are not drawn.</span></figcaption>
-  </figure>
-  <p class="note" id="mapNote"></p>
-
   <h2>Every construct the field returns to</h2>
-  <figure>
-    <svg id="figDense" class="net" viewBox="0 0 1144 844" role="img"
+  <figure class="tall">
+    <svg id="figDense" class="net" viewBox="0 0 432 494" role="img"
          aria-label="Network of all constructs used in five or more papers"></svg>
-    <figcaption><span class="fn">Figure 7</span><b>The 1,081 constructs that five or more papers use, and how they travel.</b>
+    <figcaption><span class="fn">Figure 6</span><b>The 1,081 constructs that five or more papers use, and how they travel.</b>
     <span class="nt">Note. A line joins two constructs that at least two papers assert together.
     Point size follows how many other constructs each one keeps company with, so the largest
     points are the ones the field routes its arguments through. Hover for a name, click to open.</span></figcaption>
   </figure>
   <p class="note" id="denseNote"></p>
 
+  <h2>How the field clusters</h2>
+  <figure>
+    <svg id="figMap" class="net" viewBox="0 0 750 386" role="img"
+         aria-label="Map of the constructs that co-occur across the corpus"></svg>
+    <figcaption><span class="fn">Figure 7</span><b>Nine neighbourhoods, each named by the construct that the most papers use.</b>
+    <span class="nt">Note. A neighbourhood is a set of constructs that keep company with one
+    another and with little else, found by the ties rather than imposed. The nine shown here are
+    the largest whose leading construct is one most readers will know; another thirty-nine exist
+    and are left out for legibility. Point size follows how many papers use the construct. Hover
+    for a name, click to open.</span></figcaption>
+  </figure>
+  <p class="note" id="mapNote"></p>
+
   <h2>Constructs that cross between literatures</h2>
   <figure>
-    <svg id="figBridge" class="net" viewBox="0 0 1144 420" role="img"
+    <svg id="figBridge" class="net" viewBox="0 0 760 330" role="img"
          aria-label="Constructs that connect separate neighbourhoods"></svg>
     <figcaption><span class="fn">Figure 8</span><b>The constructs that reach into the most separate neighbourhoods.</b>
     <span class="nt">Note. Counting every neighbourhood a construct touches simply recovers how
@@ -571,7 +572,7 @@ function drawMap(){
   if(!GRAPH || !GRAPH.map){ staleData(svg, "the map coordinates"); return; }
   clear(svg);
   const M = GRAPH.map;
-  const TOP = 46;                       // a clear strip for the key
+  const TOP = 42;                       // a clear strip for the key
   svg.setAttribute("viewBox", "0 0 " + M.w + " " + (M.h + TOP));
   const at = new Map();
   for(const [i,x,y,p,c] of M.nodes) at.set(i, {i,x:x,y:y+TOP,p,c});
@@ -616,18 +617,15 @@ function drawMap(){
     {line:true, color:"var(--rule)", w:1.6, text:"appear together far above chance"}],
     14, 18);
   placeLabels(svg, lab.map(d=>({x:d.x,y:d.y,r:1})), lab, M.w, M.h+TOP, false,
-              [{x0:0,y0:0,x1:220,y1:72}]);
+              [{x0:0,y0:0,x1:200,y1:66}]);
   const est=[...at.values()].filter(d=>d.p>=5).length;
   const note=document.getElementById("mapNote");
   if(note) note.innerHTML =
-    fmt(M.tied)+" constructs carry at least one tie of this kind. "+fmt(M.drawn)+" of them sit "+
-    "in a neighbourhood of three or more and are drawn here, across "+fmt(GRAPH.clusters.length)+
-    " neighbourhoods. "+fmt(est)+" of the points are constructs that five or more papers use, "+
-    "drawn solid. The larger islands carry the name of the construct that the most papers use, "+
-    "which serves as a rough name for the literature each island belongs to. Reading them from "+
-    "the top: the first islands are the ones with the most internal structure, and the field "+
-    "thins out toward the bottom into small groups of two and three constructs that travel "+
-    "together and with nothing else.";
+    "Nine neighbourhoods are drawn, holding "+fmt(at.size)+" constructs between them, of which "+
+    fmt(est)+" are used in five or more papers. Another thirty-nine neighbourhoods exist in the "+
+    "corpus and are left out so the picture stays readable; they follow the same pattern at "+
+    "smaller scale. A neighbourhood forms where constructs keep company with one another and "+
+    "with little else, which is why each one reads as a literature rather than as a list.";
 }
 
 function staleData(svg, what){
@@ -669,7 +667,7 @@ function drawDense(){
     c.style.cursor="pointer";
     c.onclick=()=>{ showTab("browse"); showDetail(d.i); };
   }
-  const top=[...at.values()].sort((a,b)=>b.deg-a.deg).slice(0,16)
+  const top=[...at.values()].sort((a,b)=>b.deg-a.deg).slice(0,11)
     .map(d=>({x:d.x,y:d.y,r:Math.max(2.2,Math.min(11,1.8+Math.sqrt(d.deg)*0.75)),
               label:tc((BYI.get(d.i)||{n:"?"}).n), kind:"paper"}));
   drawKey(svg,[
@@ -677,7 +675,7 @@ function drawDense(){
     {fill:"var(--s1)", text:"the rest"},
     {line:true, color:"var(--rule)", w:1.5, text:"two or more papers assert both"}], 14, 22);
   placeLabels(svg, [], top, D.w+24, D.h+24, true,
-    [{x0:0,y0:0,x1:232,y1:84}]);
+    [{x0:0,y0:0,x1:200,y1:72}]);
   const note=document.getElementById("denseNote");
   if(note) note.innerHTML =
     "Every construct here is used in at least five papers, and "+fmt(D.n_edges_all)+
@@ -696,11 +694,11 @@ function drawBridges(){
     .map(([i,x,y,p,deg,span,big,reach])=>({i,p,deg,span,big,reach}))
     .filter(d=>d.big>=4)
     .sort((a,b)=>b.reach-a.reach || b.big-a.big)
-    .slice(0,18);
+    .slice(0,14);
   if(!rows.length) return;
   const vb=svg.getAttribute("viewBox").split(" ").map(Number);
   const W=vb[2], H=vb[3];
-  const x0=300, x1=W-120, t=28, bpad=34;
+  const x0=228, x1=W-104, t=20, bpad=28;
   const max=Math.max(...rows.map(d=>d.big));
   const X=v=>x0+(v/max)*(x1-x0);
   const dy=(H-t-bpad)/rows.length;
@@ -849,11 +847,11 @@ async function showDetail(i){
 /* A key drawn inside the figure, so the picture explains itself. */
 function drawKey(svg, items, x, y){
   const g=el("g",{},svg);
-  el("rect",{x:x-9,y:y-14,width:208,height:items.length*16+12,rx:2,
+  el("rect",{x:x-8,y:y-13,width:192,height:items.length*15+11,rx:2,
              fill:"var(--panel)",stroke:"var(--rule)","stroke-width":1,
              "fill-opacity":0.94},g);
   items.forEach((it,i)=>{
-    const cy=y+i*16;
+    const cy=y+i*15;
     if(it.line){
       el("line",{x1:x,x2:x+16,y1:cy-3.5,y2:cy-3.5,stroke:it.color,
         "stroke-width":it.w||1.4,"stroke-dasharray":it.dash||"none"},g);
@@ -861,7 +859,7 @@ function drawKey(svg, items, x, y){
       el("circle",{cx:x+8,cy:cy-3.5,r:it.r||4.5,fill:it.fill,stroke:it.stroke||it.fill,
                    "stroke-width":it.sw||0},g);
     }
-    txt(g,x+22,cy,it.text,"kl","start");
+    txt(g,x+20,cy,it.text,"kl","start");
   });
 }
 
@@ -1024,7 +1022,7 @@ function drawNetwork(svg, nodes, links, opts){
   if(opts.key) drawKey(svg, opts.key, 12, 20);
   placeLabels(svg, nodes,
     order.filter(d=>d.label && (opts.labelAll || d.kind!=="near")), W, H, false,
-    opts.key ? [{x0:0,y0:0,x1:218,y1:opts.key.length*16+22}] : null);
+    opts.key ? [{x0:0,y0:0,x1:200,y1:opts.key.length*15+20}] : null);
 }
 
 /* ----------------------------------------------------------------- check */
