@@ -27,10 +27,16 @@ hallucination rate is a different object from one that asks to be taken on faith
 The site lets a reader do four things:
 
 1. **Read the ledger's figures**, all drawn from the shipped data rather than hand-entered.
-2. **Paste a working paper** and see which of its constructs the corpus already uses, how
-   widely, and how differently the corpus has defined them.
-3. **Browse 23,522 constructs**, with every name that was merged into each one.
-4. **Check the grounding** for any construct, with the span highlighted in its context and
+2. **Paste a working paper** and see two things: the constructs it appears to propose,
+   which are recurring terms that appear nowhere in the corpus as a construct name, each
+   placed by its head-noun family and nearest existing neighbours; and the constructs it
+   borrows, with the empirical neighbourhood each one belongs to.
+3. **See the network.** Reading a paper draws the constructs it works with, the corpus
+   ties among them, and the ties observed inside the manuscript itself, which is what
+   gives a construct the corpus has never seen a position among constructs it has.
+   Browsing a construct draws the company it keeps.
+4. **Browse 23,522 constructs**, with every name that was merged into each one.
+5. **Check the grounding** for any construct, with the span highlighted in its context and
    a DOI to the source.
 
 ## The corpus
@@ -116,12 +122,12 @@ pays twice for work already done. `--selftest` on each tool runs without network
 | Step | Cost | Wall clock |
 |---|---|---|
 | Corpus assembly | free | 41 min |
-| Extraction, 9,086 abstracts | $11.87 | 188 min at 8 workers |
+| Extraction, 9,086 abstracts | $12.49 | 206 min at 8 workers |
 | Embedding 40,945 strings | $0.20 | 15 min at 4 workers |
 | Calibration and merging | free | 4 min |
 | Grounding verification | free | seconds |
 
-Total model spend for the corpus: **$12.07**.
+Total model spend for the corpus: **about $12.69**, of which $12.49 is extraction metered from the token counts the API returns and about $0.20 is embedding, estimated from character counts because that endpoint does not meter tokens.
 
 `numpy` is required for the merging step. Everything else is standard library.
 
@@ -131,6 +137,7 @@ Total model spend for the corpus: **$12.07**.
 data/mgmt/meta.json          corpus counts, calibration, grounding rate
 data/mgmt/constructs.json    one compact record per construct, for search and browse
 data/mgmt/figures.json       precomputed series behind the figures
+data/mgmt/graph.json         co-occurrence ties, neighbourhoods, head-noun families
 data/mgmt/detail/NNNN.json   definitions and provenance, 100 constructs per file
 ```
 

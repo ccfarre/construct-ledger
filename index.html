@@ -75,6 +75,7 @@ figcaption .nt{display:block;margin-top:6px;font-size:13.5px;color:var(--ink-3)}
 .fig-row{display:grid;grid-template-columns:1fr 1fr;gap:34px}
 @media (max-width:720px){.fig-row{grid-template-columns:1fr}.tile+.tile{border-left:0}}
 svg{display:block;width:100%;height:auto;overflow:visible}
+svg.net{overflow:hidden}
 .ax{stroke:var(--ink-3);stroke-width:1;shape-rendering:crispEdges}
 .tkm{stroke:var(--ink-3);stroke-width:1;shape-rendering:crispEdges}
 .gr{stroke:var(--rule);stroke-width:1;shape-rendering:crispEdges}
@@ -83,6 +84,8 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 .dl{font-size:10.5px;font-family:var(--sans);font-weight:600;
   font-variant-numeric:tabular-nums}
 .sl{font-size:11px;font-family:var(--sans);font-weight:600}
+.nl{font-size:10px;font-family:var(--sans);font-weight:500;paint-order:stroke;
+  stroke:var(--paper);stroke-width:3px;stroke-linejoin:round}
 .pl{fill:var(--ink);font-size:12px;font-family:var(--sans);font-weight:700}
 
 /* controls */
@@ -199,13 +202,14 @@ em{font-style:italic}
 </section>
 
 <section class="panel" id="p-check" hidden>
-  <h2>Check a paper against the ledger</h2>
-  <p class="note">Paste an abstract or a few paragraphs. The page finds construct names
-  that already exist in the ledger, and for each one shows how differently the corpus has
-  defined it. Nothing is uploaded; the matching runs in your browser.</p>
-  <textarea id="paperText" placeholder="Paste an abstract here…"></textarea>
+  <h2>Read a paper against the ledger</h2>
+  <p class="note">Paste a manuscript, or its title and abstract. The page pulls out the
+  constructs the text works with, separates the ones it appears to propose from the ones
+  it borrows, and places each one in the ledger. Nothing is uploaded and no key is needed;
+  the analysis runs in your browser.</p>
+  <textarea id="paperText" placeholder="Paste a title, an abstract, or a whole manuscript..."></textarea>
   <div class="row">
-    <button class="act" id="checkBtn">Find constructs</button>
+    <button class="act" id="checkBtn">Read it</button>
     <button class="act ghost" id="sampleBtn">Use an example</button>
     <span class="note" style="margin:0" id="checkCount"></span>
   </div>
@@ -284,7 +288,7 @@ async function grab(name){
   }
   throw new Error(name + " not found (" + (last||"404") + ")");
 }
-let META=null, IDX=null, FIG=null, SHARDS={}, NAMEMAP=null;
+let META=null, IDX=null, FIG=null, SHARDS={};
 
 /* measured on the runs described in the technical appendix; not derived here */
 const CAL = {
@@ -499,7 +503,7 @@ function drawTiles(){
   document.getElementById("tiles2").innerHTML =
     tile((m.grounding_rate*100).toFixed(2)+"%", "of "+fmt(m.spans_checked)+" spans found verbatim in their own abstract") +
     tile(fmt(m.documents_refused), "abstracts the model refused, every one a non-abstract") +
-    tile("$11.87", "total model cost for the extraction, metered per call") +
+    tile("$12.49", "metered model cost of the extraction, every call counted") +
     tile("188 min", "wall clock at eight workers");
   document.getElementById("corpusLine").textContent =
     m.label + " · " + m.year_min + "–" + m.year_max + " · " +
@@ -523,7 +527,7 @@ function drawTiles(){
     '<tr><td>Corpus assembly from OpenAlex and Crossref</td><td class="num">free</td>'+
     '<td class="num">41 min</td><td>yes, resumable</td></tr>'+
     '<tr><td>Construct extraction, '+fmt(m.documents_extracted)+' abstracts</td>'+
-    '<td class="num">$11.87</td><td class="num">188 min</td><td>yes, paid work is never repeated</td></tr>'+
+    '<td class="num">$12.49</td><td class="num">206 min</td><td>yes, paid work is never repeated</td></tr>'+
     '<tr><td>Embedding '+fmt(40945)+' name-and-definition strings</td><td class="num">$0.20</td>'+
     '<td class="num">15 min</td><td>yes, cached per batch</td></tr>'+
     '<tr><td>Calibration and merging</td><td class="num">free</td><td class="num">4 min</td>'+
@@ -586,82 +590,524 @@ async function showDetail(i){
     '<h3 class="sec">How the corpus defines it</h3>'+
     '<p class="note" style="margin:0 0 6px">Up to five definitions that differ materially from one another.</p>'+
     defs+
+    (GRAPH && ties(i).length
+      ? '<h3 class="sec">The company it keeps</h3>'+
+        '<p class="note" style="margin:0 0 4px">Constructs that share a paper with this one far '+
+        'more often than their separate frequencies predict, and the strongest ties among those.</p>'+
+        '<svg id="figEgo" class="net" viewBox="0 0 640 300" role="img" '+
+        'aria-label="Constructs that co-occur with this one"></svg>'
+      : '')+
     '<h3 class="sec">Check the grounding yourself</h3>'+
     '<p class="note" style="margin:0 0 6px">Each extraction carries a span copied from its abstract. '+
     'The span is highlighted; follow the DOI to read the source.</p>'+prov+'</div>';
+  const ego=document.getElementById("figEgo");
+  if(ego){
+    const near=ties(i);
+    const ids=new Set([i, ...near.map(t=>t[0])]);
+    const nodes=[...ids].map(j=>{
+      const r=BYI.get(j)||{n:"?",p:0};
+      return {id:"c"+j, label:r.n, p:r.p, i:j,
+              kind: j===i ? "paper" : "near",
+              r: j===i ? 9 : Math.min(7, 3.6+Math.log10(Math.max(r.p,1))*2.4)};
+    });
+    const links=[];
+    for(const e of GRAPH.edges)
+      if(ids.has(e[0]) && ids.has(e[1])) links.push({a:"c"+e[0], b:"c"+e[1], w:e[2]});
+    if(nodes.length>=2)
+      drawNetwork(ego, nodes, links, {seed:5, pad:{x:132,y:26}, labelAll:true});
+  }
   box.scrollIntoView({behavior:"smooth",block:"start"});
 }
 
+/* ------------------------------------------------------------ network */
+/* A small deterministic force layout. Nodes are constructs, ties are either
+   corpus co-occurrence (two papers assert both, far above chance) or text
+   co-occurrence inside the pasted manuscript, which is the same rule applied
+   to one document. The second kind is what lets a construct the corpus has
+   never seen take a position among constructs it has. */
+
+function layout(nodes, links, W, H, seed, pad){
+  let r = seed || 7;
+  const rnd = () => (r = (r*1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const n = nodes.length;
+  if(!n) return;
+  /* lay out inside a box inset far enough that labels stay in the figure */
+  const PX = (pad && pad.x) || 96, PY = (pad && pad.y) || 26;
+  const BW = W - 2*PX, BH = H - 2*PY;
+  nodes.forEach((d,i)=>{
+    const a = 2*Math.PI*i/n + rnd()*0.4;
+    d.x = BW/2 + Math.cos(a)*BW/3.2;
+    d.y = BH/2 + Math.sin(a)*BH/3.2;
+    d.vx = d.vy = 0;
+  });
+  const idx = new Map(nodes.map((d,i)=>[d.id,i]));
+  const L = links.map(l=>[idx.get(l.a), idx.get(l.b), l.w||1])
+                 .filter(l=>l[0]!=null && l[1]!=null);
+  const k = Math.sqrt((BW*BH)/Math.max(n,1)) * 0.55;
+  const ITER = 420;
+  for(let it=0; it<ITER; it++){
+    const t = 1 - it/ITER;
+    for(let i=0;i<n;i++){
+      const a=nodes[i];
+      for(let j=i+1;j<n;j++){
+        const b=nodes[j];
+        let dx=a.x-b.x, dy=a.y-b.y;
+        let d2=dx*dx+dy*dy;
+        if(d2<1e-3){ dx=rnd()-0.5; dy=rnd()-0.5; d2=dx*dx+dy*dy; }
+        const d=Math.sqrt(d2), f=(k*k)/d;
+        const ux=dx/d, uy=dy/d;
+        a.vx+=ux*f; a.vy+=uy*f; b.vx-=ux*f; b.vy-=uy*f;
+      }
+    }
+    for(const [i,j,w] of L){
+      const a=nodes[i], b=nodes[j];
+      let dx=b.x-a.x, dy=b.y-a.y;
+      const d=Math.sqrt(dx*dx+dy*dy)||1e-3;
+      const f=(d*d)/k * Math.min(1.6, 0.8+0.25*Math.log2(1+w));
+      const ux=dx/d, uy=dy/d;
+      a.vx+=ux*f; a.vy+=uy*f; b.vx-=ux*f; b.vy-=uy*f;
+    }
+    /* gravity, so components with no ties settle near the middle instead of
+       drifting into the corners */
+    for(const d of nodes){
+      d.vx += (BW/2 - d.x) * 0.09 * k * 0.02;
+      d.vy += (BH/2 - d.y) * 0.13 * k * 0.02;
+    }
+    const cap = k*0.8*t + 1.5;
+    for(const d of nodes){
+      const sp=Math.sqrt(d.vx*d.vx+d.vy*d.vy)||1e-6;
+      const lim=Math.min(sp,cap)/sp;
+      d.x+=d.vx*lim*0.05; d.y+=d.vy*lim*0.05;
+      d.vx*=0.6; d.vy*=0.6;
+    }
+  }
+  /* push apart anything still touching */
+  for(let pass=0; pass<90; pass++){
+    let moved=false;
+    for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){
+      const a=nodes[i], b=nodes[j];
+      const need=a.r+b.r+9;
+      let dx=b.x-a.x, dy=b.y-a.y;
+      let d=Math.sqrt(dx*dx+dy*dy);
+      if(d<1e-3){ dx=rnd()-0.5; dy=rnd()-0.5; d=Math.sqrt(dx*dx+dy*dy); }
+      if(d<need){
+        const push=(need-d)/2, ux=dx/d, uy=dy/d;
+        a.x-=ux*push; a.y-=uy*push; b.x+=ux*push; b.y+=uy*push; moved=true;
+      }
+    }
+    if(!moved) break;
+  }
+  const xs=nodes.map(d=>d.x), ys=nodes.map(d=>d.y);
+  const x0=Math.min(...xs), x1=Math.max(...xs), y0=Math.min(...ys), y1=Math.max(...ys);
+  const sc=Math.min(BW/Math.max(1,x1-x0), BH/Math.max(1,y1-y0), 1.25);
+  const ox=PX+(BW-(x1-x0)*sc)/2, oy=PY+(BH-(y1-y0)*sc)/2;
+  nodes.forEach(d=>{ d.x=ox+(d.x-x0)*sc; d.y=oy+(d.y-y0)*sc; });
+}
+
+/* Label placement. Sixteen candidate positions around each node, tried in
+   order of preference, and a leader line when the label has to sit away from
+   its node. The nodes that matter are labelled first so they win the space. */
+function placeLabels(svg, nodes, shown, W, H){
+  const taken=[];
+  nodes.forEach(d=>taken.push({x0:d.x-d.r-2,x1:d.x+d.r+2,y0:d.y-d.r-2,y1:d.y+d.r+2}));
+  const hit=(b)=>taken.some(t=>!(b.x1<t.x0||b.x0>t.x1||b.y1<t.y0||b.y0>t.y1));
+  const CH=5.35, H_=11;
+  for(const d of shown){
+    const label = d.label.length>30 ? d.label.slice(0,29)+"…" : d.label;
+    const w = label.length*CH+3;
+    const cands=[];
+    for(const ring of [0,1,2]){
+      const gap = d.r + 6 + ring*13;
+      cands.push([ gap, 3.5,"start"], [-gap, 3.5,"end"]);
+      cands.push([ gap*0.72,-gap*0.55,"start"], [-gap*0.72,-gap*0.55,"end"]);
+      cands.push([ gap*0.72, gap*0.72,"start"], [-gap*0.72, gap*0.72,"end"]);
+      cands.push([ 0,-gap-3,"middle"], [0, gap+9,"middle"]);
+    }
+    let put=null;
+    for(const [dx,dy,anc] of cands){
+      const cx=d.x+dx, cy=d.y+dy;
+      const x0 = anc==="start"?cx : anc==="end"?cx-w : cx-w/2;
+      const box={x0:x0-1,x1:x0+w+1,y0:cy-H_,y1:cy+3};
+      if(box.x0<2 || box.x1>W-2 || box.y0<2 || box.y1>H-2) continue;
+      if(hit(box)) continue;
+      put=[dx,dy,anc,box]; break;
+    }
+    if(!put) continue;
+    taken.push(put[3]);
+    const far = Math.hypot(put[0],put[1]) > d.r+14;
+    const col = d.kind==="new" ? "var(--s2)" : d.kind==="paper" ? "var(--ink)" : "var(--ink-3)";
+    if(far){
+      const tx = put[2]==="start" ? put[3].x0-2 : put[2]==="end" ? put[3].x1+2 : d.x+put[0];
+      el("line",{x1:d.x,y1:d.y,x2:tx,y2:d.y+put[1]-3.5,
+                 stroke:"var(--ink-3)","stroke-width":0.6,"stroke-opacity":0.55},svg);
+    }
+    txt(svg, d.x+put[0], d.y+put[1], label, "nl", put[2]).setAttribute("fill", col);
+  }
+}
+
+function drawNetwork(svg, nodes, links, opts){
+  opts = opts || {};
+  clear(svg);
+  const vb = svg.getAttribute("viewBox").split(" ").map(Number);
+  const W=vb[2], H=vb[3];
+  layout(nodes, links, W, H, opts.seed, opts.pad);
+  const at = new Map(nodes.map(d=>[d.id,d]));
+  for(const l of links){
+    const a=at.get(l.a), b=at.get(l.b);
+    if(!a||!b) continue;
+    const e=el("line",{x1:a.x,y1:a.y,x2:b.x,y2:b.y,
+      stroke: l.kind==="text" ? "var(--s2)" : "var(--rule)",
+      "stroke-width": l.kind==="text" ? 1 : Math.min(2.4, 0.8+l.w*0.35),
+      "stroke-opacity": l.kind==="text" ? 0.55 : 0.9},svg);
+    if(l.kind==="text") e.setAttribute("stroke-dasharray","3 3");
+  }
+  for(const d of nodes){
+    const c=el("circle",{cx:d.x,cy:d.y,r:d.r,
+      fill: d.kind==="new" ? "var(--paper)" : d.kind==="paper" ? "var(--s1)" : "var(--rule)",
+      stroke: d.kind==="new" ? "var(--s2)" : d.kind==="paper" ? "var(--s1)" : "var(--ink-3)",
+      "stroke-width": d.kind==="new" ? 2 : 1},svg);
+    c.appendChild(Object.assign(document.createElementNS(SVGNS,"title"),
+      {textContent:d.label + (d.p!=null ? "  ("+d.p+" papers)" : "  (not in the ledger)")}));
+    if(d.i!=null){ c.style.cursor="pointer"; c.onclick=()=>{ showTab("browse"); showDetail(d.i); }; }
+  }
+  const order = nodes.slice().sort((a,b)=>
+    (a.kind==="new"?0:a.kind==="paper"?1:2) - (b.kind==="new"?0:b.kind==="paper"?1:2)
+    || (b.p||0)-(a.p||0));
+  placeLabels(svg, nodes,
+    order.filter(d=>d.label && (opts.labelAll || d.kind!=="near")), W, H);
+}
+
 /* ----------------------------------------------------------------- check */
+/* Two jobs the old lookup did not do. First, find the constructs a paper works
+   with rather than only the names that already exist, so a paper's own
+   contribution is visible. Second, place anything the ledger has never seen,
+   which is the question an author actually has. */
+
+let NAMEMAP=null, GRAPH=null, BYI=null;
+
 function buildNameMap(){
-  NAMEMAP=new Map();
+  NAMEMAP=new Map(); BYI=new Map();
   for(const r of IDX){
-    const k=r.k;
-    if(!k) continue;
-    const prev=NAMEMAP.get(k);
-    if(!prev || prev.p<r.p) NAMEMAP.set(k,r);
+    BYI.set(r.i, r);
+    const prev=NAMEMAP.get(r.k);
+    if(!prev || prev.p<r.p) NAMEMAP.set(r.k,r);
   }
 }
 const normTxt = s => s.toLowerCase().replace(/[^a-z0-9\s-]/g," ").replace(/\s+/g," ").trim();
-function findConstructs(text, minPapers){
-  const words=normTxt(text).split(" ").filter(Boolean);
-  const hits=[]; const seen=new Map();
-  let i=0;
-  while(i<words.length){
-    let matched=0, rec=null;
-    for(let L=Math.min(6,words.length-i); L>=2; L--){
-      const cand=words.slice(i,i+L).join(" ");
-      const r=NAMEMAP.get(cand);
-      if(r && r.p>=minPapers){ matched=L; rec=r; break; }
-    }
-    if(rec){
-      if(!seen.has(rec.i)){ seen.set(rec.i,{rec:rec,n:0}); }
-      seen.get(rec.i).n++;
-      i+=matched;
-    } else i++;
-  }
-  for(const v of seen.values()) hits.push(v);
-  hits.sort((a,b)=>b.rec.p-a.rec.p);
-  return hits;
+const STOPW = new Set(("the a an of and or in on to for with by from as at is are was were be been "+
+  "being this that these those it its their our we us they them he she his her you your i not no "+
+  "but if then than so such which who whom whose what when where how why can could may might will "+
+  "would shall should must do does did done have has had having also more most other others some "+
+  "any all each both few many much very own same into over under between within without across "+
+  "through during before after above below up down out off again further once here there s t "+
+  "et al figure table section appendix however therefore thus moreover furthermore").split(" "));
+/* bibliographic and manuscript furniture that scores well and means nothing */
+const JUNK = /^(et al|academy of management|journal of|organization science|administrative science|strategic management|management review|management journal|see also|in press|working paper|p\s|pp\s|vol\s|no\s|doi)/;
+
+function head(name){
+  const t=normTxt(name).split(" ").filter(x=>x && !STOPW.has(x));
+  return t.length ? t[t.length-1].replace(/ies$/,"y").replace(/s$/,"") : "";
 }
+
+function candidates(text){
+  const words = normTxt(text).split(" ").filter(Boolean);
+  const firstLine = normTxt((text.split("\n").find(l=>l.trim().length>8)||"").slice(0,300));
+  const opening = normTxt(text).split(" ").slice(0,400).join(" ");
+  const cnt=new Map();
+  for(const L of [2,3,4]){
+    for(let i=0;i+L<=words.length;i++){
+      const g=words.slice(i,i+L);
+      if(STOPW.has(g[0])||STOPW.has(g[g.length-1])) continue;
+      if(g.filter(x=>STOPW.has(x)).length>1) continue;
+      if(g.some(x=>x.length<3 && !/^\d/.test(x))) continue;
+      /* a phrase spanning a conjunction is a sentence fragment, not a name */
+      if(g.includes("and")||g.includes("or")||g.includes("between")) continue;
+      const k=g.join(" ");
+      cnt.set(k,(cnt.get(k)||0)+1);
+    }
+  }
+  /* a phrase the text explicitly introduces is a coinage, and authors
+     introduce one with a small set of verbs */
+  const low = normTxt(text);
+  const coined = new Set();
+  const MARK = /\b(we (?:call|term|label|name|define|introduce|propose|refer to)|which we (?:call|term|label)|that we (?:call|term|label)|we use the term|the concept of|defined as|refers to)\s+([a-z0-9][a-z0-9 -]{3,60}?)(?:\s+as\b|[,.;:]|$)/g;
+  let mm;
+  while((mm = MARK.exec(low)) !== null){
+    const phrase = mm[2].trim().split(" ").filter(x=>!STOPW.has(x)).join(" ");
+    if(phrase.split(" ").length>=2) coined.add(phrase);
+  }
+  const rows=[];
+  for(const [k,n] of cnt){
+    if(n<2 || JUNK.test(k)) continue;
+    const inTitle = firstLine.includes(k);
+    const inOpening = opening.includes(k);
+    const isCoined = [...coined].some(c=>c.includes(k)||k.includes(c));
+    const w = k.split(" ").length;
+    const score = n * Math.sqrt(w) * (inTitle?4:(inOpening?1.5:1)) * (isCoined?1.6:1);
+    rows.push({k, n, w, inTitle, inOpening, isCoined, score});
+  }
+  rows.sort((a,b)=>b.score-a.score);
+  /* drop a phrase wholly contained in a better-scoring one, which removes
+     "field compression" when "linguistic field compression" is already there */
+  const kept=[];
+  for(const r of rows){
+    if(kept.some(o=>o.k.includes(r.k) && o.k!==r.k)) continue;
+    kept.push(r);
+    if(kept.length>=60) break;
+  }
+  return kept;
+}
+
+function neighbours(name){
+  const h=head(name), t=new Set(normTxt(name).split(" ").filter(x=>!STOPW.has(x)));
+  const fam = (GRAPH.families[h]||[0,0,[]]);
+  const sib = fam[2].map(r=>BYI.get(r[0])).filter(Boolean);
+  const lex = IDX.filter(r=>{
+    if(r.h!==h) return false;
+    const rt=new Set(normTxt(r.n).split(" ").filter(x=>!STOPW.has(x)));
+    let inter=0; for(const x of t) if(rt.has(x)) inter++;
+    return inter>=1;
+  }).sort((a,b)=>b.p-a.p).slice(0,8);
+  return {head:h, famSize:fam[0], famEstablished:fam[1], siblings:sib.slice(0,8), lex};
+}
+
+function ties(i){
+  const out=[];
+  for(const e of GRAPH.edges){
+    if(e[0]===i) out.push([e[1],e[2],e[3]]);
+    else if(e[1]===i) out.push([e[0],e[2],e[3]]);
+  }
+  out.sort((a,b)=>b[1]-a[1]);
+  return out.slice(0,8);
+}
+
+/* The ledger ties two constructs when one abstract asserts both. The same rule
+   inside the pasted manuscript, at the sentence level, gives a construct the
+   corpus has never seen a position among constructs it has. */
+function textTies(text, terms){
+  const sents = text.split(/(?<=[.;:?!])\s+|\n+/);
+  const pairs = new Map();
+  const seen = new Map();
+  for(const sent of sents){
+    const low = " " + normTxt(sent) + " ";
+    const here = [];
+    for(const t of terms){
+      if(low.includes(" " + t.key + " ")) here.push(t.id);
+    }
+    const uniq = [...new Set(here)];
+    for(const id of uniq) seen.set(id, (seen.get(id)||0)+1);
+    for(let i=0;i<uniq.length;i++)
+      for(let j=i+1;j<uniq.length;j++){
+        const k = uniq[i] < uniq[j] ? uniq[i]+"\u0000"+uniq[j] : uniq[j]+"\u0000"+uniq[i];
+        pairs.set(k,(pairs.get(k)||0)+1);
+      }
+  }
+  return {pairs, seen};
+}
+
 async function runCheck(){
   const text=document.getElementById("paperText").value;
   const out=document.getElementById("checkOut");
-  if(!text.trim()){ out.innerHTML='<p class="empty">Nothing pasted yet.</p>'; return; }
-  const hits=findConstructs(text,2);
-  document.getElementById("checkCount").textContent =
-    hits.length? hits.length+" construct"+(hits.length===1?"":"s")+" already in the ledger" : "";
-  if(!hits.length){
-    out.innerHTML='<p class="empty">No construct in this text matches a name used in two or '+
-      'more papers in the corpus. That is worth knowing either way: it can mean the '+
-      'vocabulary is genuinely new, or that it is phrased differently from the corpus.</p>';
-    return;
+  if(text.trim().split(/\s+/).length<40){
+    out.innerHTML='<p class="empty">Paste at least a title and an abstract. The analysis '+
+      'works by how often a phrase recurs, so a sentence or two gives it nothing to go on.</p>';
+    document.getElementById("checkCount").textContent=""; return;
   }
-  const parts=['<h2>Constructs this text shares with the corpus</h2>',
-    '<p class="note">Ordered by how widely used each one already is. Click a row to see how '+
-    'the corpus has defined it and to check the grounding.</p>',
-    '<table><thead><tr><th>Construct</th><th class="num">Papers</th><th class="num">Mentions</th>',
-    '<th class="num">In your text</th><th class="num">First seen</th></tr></thead><tbody>'];
-  for(const h of hits)
-    parts.push('<tr data-i="'+h.rec.i+'"><td>'+esc(h.rec.n)+'</td><td class="num">'+h.rec.p+
-      '</td><td class="num">'+h.rec.m+'</td><td class="num">'+h.n+'</td><td class="num">'+
-      (h.rec.f||"")+'</td></tr>');
-  parts.push('</tbody></table>');
-  const est=hits.filter(h=>h.rec.p>=5).length;
-  parts.push('<p class="note" style="margin-top:14px">'+est+' of these '+hits.length+
-    ' are established, meaning five or more papers use them. A construct the corpus already '+
-    'defines in several incompatible ways is one to define explicitly rather than assume.</p>');
-  out.innerHTML=parts.join("");
-  out.querySelectorAll("tbody tr").forEach(tr=>tr.onclick=()=>{
+  /* two independent passes. Borrowed constructs are found by matching ledger
+     names in the text, so a construct named once still counts. Proposed ones
+     are found by recurrence, because a term a paper introduces is a term it
+     uses repeatedly. */
+  const cands=candidates(text);
+  const borrowed=[], proposed=[];
+  const w2=normTxt(text).split(" ").filter(Boolean);
+  const found=new Map();
+  for(let i=0;i<w2.length;){
+    let rec=null, len=0;
+    for(let L=Math.min(6,w2.length-i); L>=2; L--){
+      const r=NAMEMAP.get(w2.slice(i,i+L).join(" "));
+      if(r && r.p>=2){ rec=r; len=L; break; }
+    }
+    if(rec){
+      if(!found.has(rec.i)) found.set(rec.i,{rec:rec,n:0});
+      found.get(rec.i).n++; i+=len;
+    } else i++;
+  }
+  for(const v of found.values()) borrowed.push(v);
+  for(const c of cands){
+    if(c.w<2) continue;
+    const r=NAMEMAP.get(c.k);
+    if(!r || r.p<2) proposed.push(c);
+  }
+  borrowed.sort((a,b)=>b.rec.p-a.rec.p);
+  proposed.sort((a,b)=>b.score-a.score);
+  const top=proposed.slice(0,8);
+
+  document.getElementById("checkCount").textContent =
+    top.length+" candidate"+(top.length===1?"":"s")+" the ledger has not seen, "+
+    borrowed.length+" it has";
+
+  const P=[];
+
+  /* 1. what the paper appears to propose */
+  P.push('<h2>Constructs this paper appears to propose</h2>');
+  P.push('<p class="note">Recurring terms, weighted toward the title and opening, that do '+
+    'not appear as a construct name anywhere in the corpus. A term can be absent because '+
+    'it is new, or because the field words it differently.</p>');
+  if(!top.length) P.push('<p class="empty">Every recurring term in this text already exists in the ledger.</p>');
+  for(const c of top){
+    const nb=neighbours(c.k);
+    const rarity = nb.famSize<=3 ? "an almost empty neighbourhood"
+                 : nb.famSize<=20 ? "a thinly populated neighbourhood" : "a crowded neighbourhood";
+    P.push('<div class="detail" style="border-top-width:1px;margin-top:18px;padding-top:16px">'+
+      '<h3 style="font-size:19px">'+esc(c.k)+'</h3>'+
+      '<p class="meta">'+c.n+' occurrence'+(c.n===1?"":"s")+' in your text'+
+      (c.inTitle?' &middot; in the title':'')+(c.isCoined?' &middot; introduced explicitly':'')+
+      ' &middot; not in the ledger</p>'+
+      '<p class="note" style="margin:0 0 10px">Its head noun is <em>'+esc(nb.head)+'</em>, which '+
+      'heads '+fmt(nb.famSize)+' construct'+(nb.famSize===1?"":"s")+' in the corpus, '+
+      nb.famEstablished+' of them used in five or more papers. That is '+rarity+'.</p>'+
+      (nb.lex.length
+        ? '<p class="note" style="margin:0 0 4px">Nearest existing constructs sharing that head:</p>'+
+          '<table><tbody>'+nb.lex.map(r=>'<tr data-i="'+r.i+'"><td>'+esc(r.n)+
+            '</td><td class="num">'+r.p+' papers</td><td class="num">'+(r.f||"")+'</td></tr>').join("")+
+          '</tbody></table>'
+        : '<p class="note" style="margin:0">No construct in the corpus shares that head noun.</p>')+
+      '</div>');
+  }
+
+  /* 2. what it borrows, and from where */
+  P.push('<h2>Constructs it borrows</h2>');
+  if(!borrowed.length){
+    P.push('<p class="empty">No recurring term matches a construct used in two or more papers.</p>');
+  } else {
+    const clusters=new Map();
+    for(const b of borrowed){
+      const c=b.rec.c;
+      if(c==null) continue;
+      if(!clusters.has(c)) clusters.set(c,[]);
+      clusters.get(c).push(b);
+    }
+    P.push('<p class="note">Ordered by how widely each is already used. The neighbourhood is '+
+      'the group of constructs it co-occurs with far more often than chance, which is this '+
+      'corpus reading of which literature it belongs to.</p>');
+    P.push('<table><thead><tr><th>Construct</th><th class="num">Papers</th>'+
+      '<th class="num">In your text</th><th class="num">First seen</th>'+
+      '<th>Neighbourhood</th></tr></thead><tbody>');
+    for(const b of borrowed.slice(0,25)){
+      const cl=b.rec.c;
+      const label = cl==null ? '<span style="color:var(--ink-3)">no strong ties</span>'
+        : 'with '+(ties(b.rec.i).slice(0,2).map(t=>'<em>'+esc((BYI.get(t[0])||{n:"?"}).n)+'</em>').join(", ")||"others");
+      P.push('<tr data-i="'+b.rec.i+'"><td>'+esc(b.rec.n)+'</td><td class="num">'+b.rec.p+
+        '</td><td class="num">'+b.n+'</td><td class="num">'+(b.rec.f||"")+'</td><td>'+label+'</td></tr>');
+    }
+    P.push('</tbody></table>');
+    const nCl=clusters.size;
+    if(nCl>1) P.push('<p class="note" style="margin-top:14px">These borrowed constructs fall into '+
+      nCl+' different neighbourhoods, so the paper is drawing on more than one literature. '+
+      'A construct that sits between neighbourhoods is doing bridging work, and that is where '+
+      'definitions usually have to be made explicit.</p>');
+    const est=borrowed.filter(b=>b.rec.p>=5).length;
+    P.push('<p class="note">'+est+' of these '+borrowed.length+' are used in five or more papers. '+
+      'A construct the corpus already defines in several incompatible ways is one to define '+
+      'explicitly rather than assume; open any row to see how far those definitions diverge.</p>');
+  }
+  /* 3. the network */
+  const terms = [];
+  for(const b of borrowed) terms.push({id:"c"+b.rec.i, key:b.rec.k, rec:b.rec});
+  for(const c of top)      terms.push({id:"n"+c.k,    key:c.k,     cand:c});
+  const tt = textTies(text, terms);
+
+  const nodes = new Map(), links = [];
+  const add = (id, label, kind, r, extra) => {
+    if(!nodes.has(id)) nodes.set(id, Object.assign({id, label, kind, r}, extra||{}));
+    return nodes.get(id);
+  };
+  for(const b of borrowed.slice(0,18))
+    add("c"+b.rec.i, b.rec.n, "paper", Math.min(9, 4+Math.log10(Math.max(b.rec.p,1))*3.2),
+        {p:b.rec.p, i:b.rec.i});
+  for(const c of top) add("n"+c.k, c.k, "new", 6, {});
+
+  /* corpus ties among the paper's own constructs, plus one ring of companions */
+  const inPaper = new Set([...nodes.keys()].filter(k=>k[0]==="c").map(k=>+k.slice(1)));
+  for(const e of GRAPH.edges){
+    const a=e[0], b=e[1];
+    if(inPaper.has(a) && inPaper.has(b)) links.push({a:"c"+a, b:"c"+b, w:e[2]});
+  }
+  for(const i of inPaper){
+    for(const [j, n] of ties(i).slice(0,3)){
+      if(inPaper.has(j)) continue;
+      const r=BYI.get(j); if(!r) continue;
+      add("c"+j, r.n, "near", 3.6, {p:r.p, i:j});
+      links.push({a:"c"+i, b:"c"+j, w:n});
+    }
+  }
+  /* ties observed inside the manuscript */
+  const tl=[];
+  for(const [k, n] of tt.pairs){
+    const [x,y] = k.split("\u0000");
+    if(!nodes.has(x) || !nodes.has(y)) continue;
+    if(nodes.get(x).kind==="near" || nodes.get(y).kind==="near") continue;
+    tl.push({a:x, b:y, w:n, kind:"text"});
+  }
+  tl.sort((a,b)=>b.w-a.w);
+  for(const l of tl.slice(0,40)) links.push(l);
+
+  const deg=new Map();
+  for(const l of links){ deg.set(l.a,(deg.get(l.a)||0)+1); deg.set(l.b,(deg.get(l.b)||0)+1); }
+  const dropped=[...nodes.values()].filter(d=>!deg.has(d.id));
+  const nodeList=[...nodes.values()].filter(d=>deg.has(d.id));
+  const keep=new Set(nodeList.map(d=>d.id));
+  const linkList=links.filter(l=>keep.has(l.a)&&keep.has(l.b));
+  links.length=0; for(const l of linkList) links.push(l);
+  if(nodeList.length >= 3){
+    const nNew = nodeList.filter(d=>d.kind==="new").length;
+    const placed = nodeList.filter(d=>d.kind==="new" &&
+      links.some(l=>l.kind==="text" && (l.a===d.id||l.b===d.id))).length;
+    P.push('<h2>How these constructs sit together</h2>');
+    P.push('<figure style="margin-top:16px">'+
+      '<svg id="figNet" class="net" viewBox="0 0 640 470" role="img" aria-label="Network of the constructs in this paper"></svg>'+
+      '<figcaption><span class="fn">Figure</span><b>The constructs in this paper, and the company they keep.</b>'+
+      '<span class="nt">Note. Filled circles are constructs the corpus already uses, sized by how many '+
+      'papers use them; open circles are constructs the corpus has not seen. Grey lines are corpus ties, '+
+      'where two constructs appear in the same paper far more often than their separate frequencies '+
+      'predict; dashed lines are ties observed inside your own manuscript, where two constructs share a '+
+      'sentence at least twice. Small grey circles are the strongest companions of your constructs in the '+
+      'corpus, drawn in to show which literature each one sits in. Click any filled circle to open it.'+
+      '</span></figcaption></figure>');
+    P.push('<p class="note">'+placed+' of the '+nNew+' constructs the corpus has not seen are tied '+
+      'into the structure through your own text, which is what puts them on the map at all: a '+
+      'construct nobody has used has no corpus ties by definition, so its only position is the '+
+      'company it keeps in your own sentences.'+
+      (dropped.length ? ' '+dropped.length+' construct'+(dropped.length===1?'':'s')+
+        ' had no tie of either kind and '+(dropped.length===1?'is':'are')+' left out of the picture: '+
+        dropped.slice(0,10).map(d=>'<em>'+esc(d.label)+'</em>').join(", ")+
+        (dropped.length>10?', and others':'')+'.' : '')+'</p>');
+  }
+
+  out.innerHTML=P.join("");
+  out.querySelectorAll("tbody tr[data-i]").forEach(tr=>tr.onclick=()=>{
     showTab("browse"); showDetail(+tr.dataset.i);
   });
+  if(nodeList.length >= 3){
+    drawNetwork(document.getElementById("figNet"), nodeList, links, {seed:11});
+    LASTNET = {nodes:nodeList, links:links};
+  }
 }
-const SAMPLE = "We argue that absorptive capacity conditions the relationship between "+
-  "environmental dynamism and firm performance. Drawing on the resource based view, we "+
-  "propose that organizational slack and top management team heterogeneity jointly shape "+
-  "the exploration exploitation balance, and that competitive advantage is sustained only "+
-  "where knowledge transfer across business units is routinised. We test these ideas on a "+
-  "panel of manufacturing firms.";
+let LASTNET=null;
+
+const SAMPLE = "Between Institutional Validity and Digital Engagement: Selective Weaving and "+
+  "Linguistic Field Compression in Digital Environments\n\n"+
+  "Digital communication environments have become saturated with misinformation, which has "+
+  "altered how organizations signal and acquire legitimacy. We argue that organizations at "+
+  "different validity positions engage in selective weaving, combining the communicative "+
+  "practices of highly validated organizations with the engagement practices of low validity "+
+  "sources. The result is linguistic field compression: the stylistic distance between "+
+  "organizations at different validity positions narrows, even though their journalistic "+
+  "practices do not converge. We test linguistic field compression on a corpus of news "+
+  "organizations and show that selective weaving is strongest among medium-validity "+
+  "organizations, where institutional validity and digital engagement pull hardest against "+
+  "each other. Linguistic field compression therefore explains why audience attention and "+
+  "organizational legitimacy can decouple in digital environments.";
 
 /* ------------------------------------------------------------------ tabs */
 function showTab(p){
@@ -683,7 +1129,8 @@ function showTab(p){
   };
   document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>showTab(b.dataset.p));
   try{
-    [META, IDX, FIG] = await Promise.all([grab("meta.json"), grab("constructs.json"), grab("figures.json")]);
+    [META, IDX, FIG, GRAPH] = await Promise.all([grab("meta.json"), grab("constructs.json"),
+       grab("figures.json"), grab("graph.json")]);
   }catch(e){
     document.getElementById("corpusLine").textContent = "could not load the ledger: "+e.message;
     return;
@@ -700,7 +1147,9 @@ function showTab(p){
   document.getElementById("sampleBtn").onclick=()=>{
     document.getElementById("paperText").value=SAMPLE; runCheck();
   };
-  addEventListener("resize",()=>drawFigures());
+  addEventListener("resize",()=>{ drawFigures();
+    if(LASTNET && document.getElementById("figNet"))
+      drawNetwork(document.getElementById("figNet"), LASTNET.nodes, LASTNET.links, {seed:11}); });
 })();
 </script>
 </body>
