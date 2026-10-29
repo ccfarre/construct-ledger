@@ -4,27 +4,30 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Construct Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{
   color-scheme: light;
-  --paper:#ffffff; --wash:#f4f6f7; --rule:#dde2e5; --rule-soft:#eaeef0;
-  --ink:#10161b; --ink-2:#44515c; --ink-3:#78858f;
+  --paper:#f5f6f3; --panel:#fffffe; --wash:#eceeea; --rule:#d7dad2; --rule-soft:#e6e8e2;
+  --ink:#14181a; --ink-2:#4b545a; --ink-3:#7d868b;
   --s1:#00897b; --s2:#c1440e; --mark:#ffeec2;
-  --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
-  --sans:"Helvetica Neue",Helvetica,Arial,system-ui,sans-serif;
-  --mono:"SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+  --serif:"Newsreader","Iowan Old Style",Palatino,Georgia,serif;
+  --sans:"IBM Plex Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
+  --mono:"IBM Plex Mono","SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
     color-scheme: dark;
-    --paper:#14171a; --wash:#1b2024; --rule:#2d343a; --rule-soft:#232a2f;
+    --paper:#111417; --panel:#171b1f; --wash:#1c2126; --rule:#2c3339; --rule-soft:#222830;
     --ink:#eef1f3; --ink-2:#b2bdc5; --ink-3:#808d96;
     --s1:#2aa394; --s2:#dd6a33; --mark:#53431a;
   }
 }
 :root[data-theme="dark"]{
   color-scheme: dark;
-  --paper:#14171a; --wash:#1b2024; --rule:#2d343a; --rule-soft:#232a2f;
+  --paper:#111417; --panel:#171b1f; --wash:#1c2126; --rule:#2c3339; --rule-soft:#222830;
   --ink:#eef1f3; --ink-2:#b2bdc5; --ink-3:#808d96;
   --s1:#2aa394; --s2:#dd6a33; --mark:#53431a;
 }
@@ -33,10 +36,10 @@ html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--paper);color:var(--ink);
   font-family:var(--serif);font-size:16px;line-height:1.6;position:relative;
   -webkit-font-smoothing:antialiased;font-kerning:normal}
-.wrap{max-width:860px;margin:0 auto;padding:0 20px 96px}
+.wrap{max-width:1060px;margin:0 auto;padding:0 28px 96px}
 header{padding:48px 0 0}
 h1{font-size:32px;line-height:1.15;margin:0 0 10px;font-weight:600;letter-spacing:-0.012em}
-.sub{color:var(--ink-2);font-size:16.5px;margin:0;max-width:62ch;line-height:1.55}
+.sub{color:var(--ink-2);font-size:17px;margin:0;max-width:none;line-height:1.5}
 .corpus{font-family:var(--sans);font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;
   color:var(--ink-3);margin:18px 0 0;padding-top:14px;border-top:1px solid var(--rule)}
 nav{display:flex;gap:26px;flex-wrap:wrap;margin:26px 0 40px;
@@ -51,8 +54,8 @@ h2{font-size:21px;margin:52px 0 6px;font-weight:600;letter-spacing:-0.008em}
 h2:first-child{margin-top:0}
 h3.sec{font-family:var(--sans);font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;
   color:var(--ink-3);font-weight:600;margin:26px 0 8px}
-.note{color:var(--ink-2);font-size:15px;margin:6px 0 20px;max-width:64ch}
-.lede{font-size:16px;color:var(--ink-2);max-width:64ch;margin:6px 0 26px}
+.note{color:var(--ink-2);font-size:15px;margin:6px 0 20px;max-width:none}
+.lede{font-size:16.5px;color:var(--ink-2);max-width:none;margin:6px 0 26px}
 
 /* key figures: a rule-separated row, not cards */
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
@@ -61,20 +64,22 @@ h3.sec{font-family:var(--sans);font-size:11.5px;letter-spacing:.09em;text-transf
 .tile+.tile{border-left:1px solid var(--rule-soft);padding-left:18px}
 .tile .v{font-size:26px;font-weight:600;letter-spacing:-0.02em;font-variant-numeric:tabular-nums;
   line-height:1.1}
-.tile .k{font-family:var(--sans);font-size:11.5px;color:var(--ink-3);margin-top:7px;
-  line-height:1.4;max-width:24ch}
+.tile .k{font-family:var(--sans);font-size:12px;color:var(--ink-3);margin-top:7px;
+  line-height:1.4;max-width:28ch}
 
 /* figures, journal style */
 figure{margin:26px 0 34px;padding:0}
-figcaption{font-size:14px;color:var(--ink-2);margin-top:14px;max-width:68ch;line-height:1.5;
+figcaption{font-size:14px;color:var(--ink-2);margin-top:14px;max-width:none;line-height:1.5;
   padding-top:10px;border-top:1px solid var(--rule)}
 figcaption .fn{font-family:var(--sans);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
-  color:var(--ink-3);font-weight:600;margin-right:7px}
+  color:var(--ink-3);font-weight:600}
+figcaption .fn::after{content:'\00a0\00a0'}
 figcaption b{color:var(--ink);font-weight:600}
 figcaption .nt{display:block;margin-top:6px;font-size:13.5px;color:var(--ink-3)}
 .fig-row{display:grid;grid-template-columns:1fr 1fr;gap:34px}
 @media (max-width:720px){.fig-row{grid-template-columns:1fr}.tile+.tile{border-left:0}}
 svg{display:block;width:100%;height:auto;overflow:visible}
+figure svg.net{background:var(--panel);border:1px solid var(--rule-soft);border-radius:2px}
 svg.net{overflow:hidden}
 .ax{stroke:var(--ink-3);stroke-width:1;shape-rendering:crispEdges}
 .tkm{stroke:var(--ink-3);stroke-width:1;shape-rendering:crispEdges}
@@ -84,17 +89,19 @@ svg.net{overflow:hidden}
 .dl{font-size:10.5px;font-family:var(--sans);font-weight:600;
   font-variant-numeric:tabular-nums}
 .sl{font-size:11px;font-family:var(--sans);font-weight:600}
-.nl{font-size:10px;font-family:var(--sans);font-weight:500;paint-order:stroke;
-  stroke:var(--paper);stroke-width:3px;stroke-linejoin:round}
+.kl{font-size:10.5px;font-family:var(--sans);fill:var(--ink-2)}
+.an{font-size:11px;font-family:var(--sans);font-style:italic;fill:var(--ink-3)}
+.nl{font-size:10.5px;font-family:var(--sans);font-weight:600;paint-order:stroke;
+  stroke:var(--panel);stroke-width:3.5px;stroke-linejoin:round}
 .pl{fill:var(--ink);font-size:12px;font-family:var(--sans);font-weight:700}
 
 /* controls */
 input[type=search],input[type=text],textarea,select{
-  font-family:var(--sans);font-size:14px;color:var(--ink);background:var(--paper);
+  font-family:var(--sans);font-size:14px;color:var(--ink);background:transparent;
   border:0;border-bottom:1px solid var(--ink-3);border-radius:0;padding:8px 2px;width:100%}
 input:focus,textarea:focus,select:focus{outline:0;border-bottom-color:var(--s1)}
-textarea{min-height:150px;resize:vertical;border:1px solid var(--rule);padding:12px;
-  font-family:var(--serif);font-size:15px;line-height:1.6;background:var(--wash)}
+textarea{min-height:170px;resize:vertical;border:1px solid var(--rule);padding:14px;
+  font-family:var(--serif);font-size:15px;line-height:1.6;background:var(--panel)}
 button.act{appearance:none;font-family:var(--sans);font-size:11.5px;letter-spacing:.08em;
   text-transform:uppercase;font-weight:600;cursor:pointer;background:var(--ink);
   color:var(--paper);border:1px solid var(--ink);border-radius:0;padding:9px 16px}
@@ -135,12 +142,12 @@ tbody tr:hover td{background:var(--wash)}
   letter-spacing:.02em}
 a{color:inherit;text-decoration-color:var(--s1);text-underline-offset:2px}
 a:hover{color:var(--s1)}
-.empty{color:var(--ink-3);font-size:15px;padding:24px 0;max-width:62ch}
-.warn{border-left:2px solid var(--s2);padding:2px 0 2px 16px;margin:16px 0;
-  font-size:14.5px;color:var(--ink-2);max-width:68ch}
+.empty{color:var(--ink-3);font-size:15px;padding:24px 0;max-width:none}
+.warn{border-left:2px solid var(--s2);padding:2px 0 2px 18px;margin:16px 0;
+  font-size:15px;color:var(--ink-2);max-width:none}
 .warn b{color:var(--ink)}
 .foot{margin-top:64px;padding-top:16px;border-top:1px solid var(--rule);
-  font-family:var(--sans);font-size:11.5px;color:var(--ink-3);max-width:70ch;line-height:1.6}
+  font-family:var(--sans);font-size:11.5px;color:var(--ink-3);max-width:none;line-height:1.6}
 .toggle{position:absolute;top:22px;right:20px;font-family:var(--sans);font-size:10.5px;
   letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);background:none;
   border:0;cursor:pointer;padding:4px}
@@ -154,9 +161,7 @@ em{font-style:italic}
 <div class="wrap">
 <header>
   <h1>Construct Ledger</h1>
-  <p class="sub">Every theoretical construct stated in the abstracts of five management and
-  organization journals, extracted with a verbatim span from the text it came from, merged
-  at a calibrated threshold, and open to inspection.</p>
+  <p class="sub">A census of the theoretical constructs stated in the abstracts of five management and organization journals between 1990 and 2025. Every construct carries the sentence it was drawn from, so any single entry can be checked against its source.</p>
   <p class="corpus" id="corpusLine">loading…</p>
 </header>
 
@@ -203,10 +208,7 @@ em{font-style:italic}
 
 <section class="panel" id="p-check" hidden>
   <h2>Read a paper against the ledger</h2>
-  <p class="note">Paste a manuscript, or its title and abstract. The page pulls out the
-  constructs the text works with, separates the ones it appears to propose from the ones
-  it borrows, and places each one in the ledger. Nothing is uploaded and no key is needed;
-  the analysis runs in your browser.</p>
+  <p class="note">Paste a manuscript, or its title and abstract. The page pulls out the constructs the text works with, separates the ones it appears to propose from the ones it borrows, and places each one against the ledger. Nothing leaves your browser and no key is needed.</p>
   <textarea id="paperText" placeholder="Paste a title, an abstract, or a whole manuscript..."></textarea>
   <div class="row">
     <button class="act" id="checkBtn">Read it</button>
@@ -259,6 +261,30 @@ em{font-style:italic}
     Constructs with no such tie are not drawn.</span></figcaption>
   </figure>
   <p class="note" id="mapNote"></p>
+
+  <h2>Every construct the field returns to</h2>
+  <figure>
+    <svg id="figDense" class="net" viewBox="0 0 1144 844" role="img"
+         aria-label="Network of all constructs used in five or more papers"></svg>
+    <figcaption><span class="fn">Figure 7</span><b>The 1,081 constructs that five or more papers use, and how they travel.</b>
+    <span class="nt">Note. A line joins two constructs that at least two papers assert together.
+    Point size follows how many other constructs each one keeps company with, so the largest
+    points are the ones the field routes its arguments through. Hover for a name, click to open.</span></figcaption>
+  </figure>
+  <p class="note" id="denseNote"></p>
+
+  <h2>Constructs that cross between literatures</h2>
+  <figure>
+    <svg id="figBridge" class="net" viewBox="0 0 1144 420" role="img"
+         aria-label="Constructs that connect separate neighbourhoods"></svg>
+    <figcaption><span class="fn">Figure 8</span><b>The constructs that reach into the most separate neighbourhoods.</b>
+    <span class="nt">Note. Counting every neighbourhood a construct touches simply recovers how
+    common it is, since the commonest constructs touch almost all of them. These are ranked by how
+    many substantial neighbourhoods a construct reaches set against how much company it keeps in
+    total, which surfaces constructs that cross literatures without being ubiquitous. A construct
+    high on this list carries different meanings in different places, and is worth defining
+    explicitly wherever it is used.</span></figcaption>
+  </figure>
 
   <h2>Deciding when two names mean the same construct</h2>
   <p class="note">Constructs arrive as names, and the same construct arrives under many names.
@@ -349,6 +375,23 @@ function txt(parent, x, y, s, cls, anchor){
 }
 function clear(svg){ while(svg.firstChild) svg.removeChild(svg.firstChild); }
 const fmt = n => n>=1000 ? n.toLocaleString("en-US") : String(n);
+/* Construct names arrive however their paper wrote them. Shown in one case so a
+   list of them reads as a list of names. */
+const MINOR = new Set(["of","and","the","in","on","to","for","with","by","from",
+  "as","at","or","a","an","vs","per","into","over","under","between","within"]);
+function tc(name){
+  if(!name) return "";
+  const w = String(name).split(/(\s+|-)/);
+  let first = true;
+  return w.map(part=>{
+    if(/^(\s+|-)$/.test(part)) return part;
+    const low = part.toLowerCase();
+    if(part.length>1 && part === part.toUpperCase()) { first=false; return part; }
+    const out = (!first && MINOR.has(low)) ? low : low.charAt(0).toUpperCase()+low.slice(1);
+    first = false;
+    return out;
+  }).join("");
+}
 function niceTicks(lo, hi, want){
   if(hi<=lo) return [lo];
   const raw=(hi-lo)/Math.max(1,want), mag=Math.pow(10,Math.floor(Math.log10(raw)));
@@ -467,6 +510,8 @@ function drawFigures(){
     {l:48,b:38,pct:true,xtitle:"year"});
 
   drawMap();
+  drawDense();
+  drawBridges();
   hDots(document.getElementById("figJrn"),
     FIG.journals.map(j=>[j[0].replace("Academy of Management","Acad. of Mgmt"),j[1]]));
 
@@ -543,7 +588,7 @@ function drawMap(){
       "stroke-width": est ? 0 : 0.9},svg);
     const rec = BYI.get(d.i);
     c.appendChild(Object.assign(document.createElementNS(SVGNS,"title"),
-      {textContent:(rec?rec.n:"?")+"  ("+d.p+" paper"+(d.p===1?"":"s")+")"}));
+      {textContent:(rec?tc(rec.n):"?")+"  ("+d.p+" paper"+(d.p===1?"":"s")+")"}));
     c.style.cursor="pointer";
     c.onclick=()=>{ showTab("browse"); showDetail(d.i); };
   }
@@ -561,9 +606,16 @@ function drawMap(){
     const rec=BYI.get(lead.i); if(!rec) continue;
     const cx=g.reduce((s,d)=>s+d.x,0)/g.length;
     const top=Math.min(...g.map(d=>d.y));
-    lab.push({x:cx,y:top-9,r:2,label:rec.n,kind:"paper"});
+    lab.push({x:cx,y:top-9,r:2,label:tc(rec.n),kind:"paper"});
   }
   placeLabels(svg, lab.map(d=>({x:d.x,y:d.y,r:1})), lab, M.w, M.h);
+  drawKey(svg, [
+    {fill:"var(--s1)", text:"used in five or more papers"},
+    {fill:"var(--paper)", stroke:"var(--ink-3)", sw:1, r:3.5, text:"used in fewer"},
+    {line:true, color:"var(--rule)", w:1.6, text:"appear together far above chance"}],
+    14, M.h-54);
+  txt(svg, 14, 18, "Each cluster is a group of constructs that keep company with one another",
+      "an", "start");
   const est=[...at.values()].filter(d=>d.p>=5).length;
   const note=document.getElementById("mapNote");
   if(note) note.innerHTML =
@@ -575,6 +627,86 @@ function drawMap(){
     "the top: the first islands are the ones with the most internal structure, and the field "+
     "thins out toward the bottom into small groups of two and three constructs that travel "+
     "together and with nothing else.";
+}
+
+function drawDense(){
+  const svg=document.getElementById("figDense");
+  if(!svg || !GRAPH || !GRAPH.dense) return;
+  clear(svg);
+  const D=GRAPH.dense;
+  svg.setAttribute("viewBox","0 0 "+(D.w+24)+" "+(D.h+24));
+  const at=new Map();
+  for(const [i,x,y,p,deg,span] of D.nodes) at.set(i,{i,x:x+12,y:y+12,p,deg,span});
+  const byIdx=D.nodes.map(n=>at.get(n[0]));
+  for(const [a,b,n] of D.edges){
+    const p=byIdx[a], q=byIdx[b];
+    if(!p||!q) continue;
+    el("line",{x1:p.x,y1:p.y,x2:q.x,y2:q.y,stroke:"var(--rule)",
+               "stroke-width":Math.min(1.5,0.4+n*0.18),"stroke-opacity":0.8},svg);
+  }
+  const maxDeg=Math.max(...[...at.values()].map(d=>d.deg));
+  for(const d of at.values()){
+    const hub = d.deg >= maxDeg*0.14;
+    const r = Math.max(2.2, Math.min(13, 1.8+Math.sqrt(d.deg)*0.8));
+    const c=el("circle",{cx:d.x,cy:d.y,r:r,
+      fill: hub ? "var(--s2)" : "var(--s1)",
+      stroke: hub ? "var(--panel)" : "none", "stroke-width": hub ? 1.4 : 0,
+      "fill-opacity": hub ? 1 : 0.62},svg);
+    const rec=BYI.get(d.i);
+    c.appendChild(Object.assign(document.createElementNS(SVGNS,"title"),
+      {textContent:(rec?tc(rec.n):"?")+"  ("+d.p+" papers, keeps company with "+d.deg+" constructs)"}));
+    c.style.cursor="pointer";
+    c.onclick=()=>{ showTab("browse"); showDetail(d.i); };
+  }
+  const top=[...at.values()].sort((a,b)=>b.deg-a.deg).slice(0,16)
+    .map(d=>({x:d.x,y:d.y,r:Math.max(2.2,Math.min(11,1.8+Math.sqrt(d.deg)*0.75)),
+              label:tc((BYI.get(d.i)||{n:"?"}).n), kind:"paper"}));
+  placeLabels(svg, [], top, D.w+24, D.h+24, true,
+    [{x0:0,y0:0,x1:232,y1:84}]);
+  drawKey(svg,[
+    {fill:"var(--s2)", text:"the most connected constructs"},
+    {fill:"var(--s1)", text:"the rest"},
+    {line:true, color:"var(--rule)", w:1.5, text:"two or more papers assert both"}], 14, 22);
+  const note=document.getElementById("denseNote");
+  if(note) note.innerHTML =
+    "Every construct here is used in at least five papers, and "+fmt(D.n_edges_all)+
+    " pairs of them appear together in at least one paper. The sixteen names shown are the "+
+    "constructs that keep company with the most others, which is one way of asking which "+
+    "constructs the field cannot write a paper without.";
+}
+
+function drawBridges(){
+  const svg=document.getElementById("figBridge");
+  if(!svg || !GRAPH || !GRAPH.dense) return;
+  clear(svg);
+  const D=GRAPH.dense;
+  const rows=D.nodes
+    .map(([i,x,y,p,deg,span,big,reach])=>({i,p,deg,span,big,reach}))
+    .filter(d=>d.big>=4)
+    .sort((a,b)=>b.reach-a.reach || b.big-a.big)
+    .slice(0,18);
+  if(!rows.length) return;
+  const vb=svg.getAttribute("viewBox").split(" ").map(Number);
+  const W=vb[2], H=vb[3];
+  const x0=300, x1=W-120, t=28, bpad=34;
+  const max=Math.max(...rows.map(d=>d.big));
+  const X=v=>x0+(v/max)*(x1-x0);
+  const dy=(H-t-bpad)/rows.length;
+  rows.forEach((d,i)=>{
+    const y=t+dy*(i+0.5);
+    const rec=BYI.get(d.i)||{n:"?"};
+    el("line",{x1:x0,x2:X(d.big),y1:y,y2:y,stroke:"var(--rule)","stroke-width":1},svg);
+    const c=el("circle",{cx:X(d.big),cy:y,r:4.2,fill:"var(--s2)"},svg);
+    c.style.cursor="pointer"; c.onclick=()=>{ showTab("browse"); showDetail(d.i); };
+    c.appendChild(Object.assign(document.createElementNS(SVGNS,"title"),
+      {textContent:tc(rec.n)+": reaches "+d.big+" neighbourhoods, keeps company with "+
+                   d.deg+" constructs, used in "+d.p+" papers"}));
+    txt(svg,x0-10,y+3.6,tc(rec.n),"tk","end");
+    txt(svg,X(d.big)+10,y+3.6,d.big+" of "+D.big_hoods+"  ("+d.p+" papers)","dl","start")
+      .setAttribute("fill","var(--ink-2)");
+  });
+  el("line",{x1:x0,x2:x0,y1:t,y2:H-bpad,class:"ax"},svg);
+  txt(svg,(x0+x1)/2,H-10,"substantial neighbourhoods the construct reaches into","al","middle");
 }
 
 /* ----------------------------------------------------------------- tiles */
@@ -610,7 +742,7 @@ function drawTiles(){
     "merges two names asks that one name's words contain the other's, and in management the "+
     "shorter name is often the general construct while the longer one is a theorised "+
     "specialisation of it, so the rule absorbs distinctions that matter: " +
-    OVERMERGE.map(p=>"<em>"+p[1]+"</em> into <em>"+p[0]+"</em>").join(", ") +
+    OVERMERGE.map(p=>"<em>"+tc(p[1])+"</em> into <em>"+tc(p[0])+"</em>").join(", ") +
     ". The same shape appears in information systems, where <em>IT innovation</em> is absorbed "+
     "into <em>innovation</em>, so this follows from the rule and applies to both fields. Every "+
     "merge is open to inspection in the browser above. Secondly, the single-use tail moves with "+
@@ -642,7 +774,7 @@ function renderList(){
     '<table><thead><tr><th>Construct</th><th class="num">Papers</th><th class="num">Mentions</th>',
     '<th class="num">Names</th><th class="num">First</th><th class="num">Last</th></tr></thead><tbody>'];
   for(const r of rows)
-    h.push('<tr data-i="'+r.i+'"><td>'+esc(r.n)+'</td><td class="num">'+r.p+
+    h.push('<tr data-i="'+r.i+'"><td>'+esc(tc(r.n))+'</td><td class="num">'+r.p+
            '</td><td class="num">'+r.m+'</td><td class="num">'+(r.sf||1)+
            '</td><td class="num">'+(r.f||"")+'</td><td class="num">'+(r.l||"")+'</td></tr>');
   h.push('</tbody></table>');
@@ -664,12 +796,12 @@ async function showDetail(i){
       ' · <a href="https://doi.org/'+encodeURIComponent(p.id)+'" target="_blank" rel="noopener">'+
       esc(p.id)+'</a></div></div>';
   }).join("");
-  box.innerHTML='<div class="detail"><h3>'+esc(d.n)+'</h3>'+
+  box.innerHTML='<div class="detail"><h3>'+esc(tc(d.n))+'</h3>'+
     '<p class="meta">'+d.p+' paper'+(d.p===1?"":"s")+' · '+d.m+
     ' mention'+(d.m===1?"":"s")+' · '+Object.entries(d.roles).map(([k,v])=>
       '<span class="pill">'+esc(k||"unlabelled")+' '+v+'</span>').join("")+'</p>'+
     (d.forms.length>1?'<p class="note" style="margin:0 0 12px">Names merged into this construct: '+
-      d.forms.map(f=>"<em>"+esc(f)+"</em>").join(", ")+'</p>':"")+
+      d.forms.map(f=>"<em>"+esc(tc(f))+"</em>").join(", ")+'</p>':"")+
     '<h3 class="sec">How the corpus defines it</h3>'+
     '<p class="note" style="margin:0 0 6px">Up to five definitions that differ materially from one another.</p>'+
     defs+
@@ -689,7 +821,7 @@ async function showDetail(i){
     const ids=new Set([i, ...near.map(t=>t[0])]);
     const nodes=[...ids].map(j=>{
       const r=BYI.get(j)||{n:"?",p:0};
-      return {id:"c"+j, label:r.n, p:r.p, i:j,
+      return {id:"c"+j, label:tc(r.n), p:r.p, i:j,
               kind: j===i ? "paper" : "near",
               r: j===i ? 9 : Math.min(7, 3.6+Math.log10(Math.max(r.p,1))*2.4)};
     });
@@ -700,6 +832,25 @@ async function showDetail(i){
       drawNetwork(ego, nodes, links, {seed:5, pad:{x:132,y:26}, labelAll:true});
   }
   box.scrollIntoView({behavior:"smooth",block:"start"});
+}
+
+/* A key drawn inside the figure, so the picture explains itself. */
+function drawKey(svg, items, x, y){
+  const g=el("g",{},svg);
+  el("rect",{x:x-9,y:y-14,width:208,height:items.length*16+12,rx:2,
+             fill:"var(--panel)",stroke:"var(--rule)","stroke-width":1,
+             "fill-opacity":0.94},g);
+  items.forEach((it,i)=>{
+    const cy=y+i*16;
+    if(it.line){
+      el("line",{x1:x,x2:x+16,y1:cy-3.5,y2:cy-3.5,stroke:it.color,
+        "stroke-width":it.w||1.4,"stroke-dasharray":it.dash||"none"},g);
+    } else {
+      el("circle",{cx:x+8,cy:cy-3.5,r:it.r||4.5,fill:it.fill,stroke:it.stroke||it.fill,
+                   "stroke-width":it.sw||0},g);
+    }
+    txt(g,x+22,cy,it.text,"kl","start");
+  });
 }
 
 /* ------------------------------------------------------------ network */
@@ -790,9 +941,11 @@ function layout(nodes, links, W, H, seed, pad){
 /* Label placement. Sixteen candidate positions around each node, tried in
    order of preference, and a leader line when the label has to sit away from
    its node. The nodes that matter are labelled first so they win the space. */
-function placeLabels(svg, nodes, shown, W, H){
+function placeLabels(svg, nodes, shown, W, H, overNodes, exclude){
   const taken=[];
-  nodes.forEach(d=>taken.push({x0:d.x-d.r-2,x1:d.x+d.r+2,y0:d.y-d.r-2,y1:d.y+d.r+2}));
+  if(exclude) for(const b of exclude) taken.push(b);
+  if(!overNodes)
+    nodes.forEach(d=>taken.push({x0:d.x-d.r-2,x1:d.x+d.r+2,y0:d.y-d.r-2,y1:d.y+d.r+2}));
   const hit=(b)=>taken.some(t=>!(b.x1<t.x0||b.x0>t.x1||b.y1<t.y0||b.y0>t.y1));
   const CH=5.35, H_=11;
   for(const d of shown){
@@ -858,6 +1011,7 @@ function drawNetwork(svg, nodes, links, opts){
     || (b.p||0)-(a.p||0));
   placeLabels(svg, nodes,
     order.filter(d=>d.label && (opts.labelAll || d.kind!=="near")), W, H);
+  if(opts.key) drawKey(svg, opts.key, 12, 20);
 }
 
 /* ----------------------------------------------------------------- check */
@@ -1042,7 +1196,7 @@ async function runCheck(){
     const rarity = nb.famSize<=3 ? "an almost empty neighbourhood"
                  : nb.famSize<=20 ? "a thinly populated neighbourhood" : "a crowded neighbourhood";
     P.push('<div class="detail" style="border-top-width:1px;margin-top:18px;padding-top:16px">'+
-      '<h3 style="font-size:19px">'+esc(c.k)+'</h3>'+
+      '<h3 style="font-size:19px">'+esc(tc(c.k))+'</h3>'+
       '<p class="meta">'+c.n+' occurrence'+(c.n===1?"":"s")+' in your text'+
       (c.inTitle?' &middot; in the title':'')+(c.isCoined?' &middot; introduced explicitly':'')+
       ' &middot; not in the ledger</p>'+
@@ -1051,7 +1205,7 @@ async function runCheck(){
       nb.famEstablished+' of them used in five or more papers. That is '+rarity+'.</p>'+
       (nb.lex.length
         ? '<p class="note" style="margin:0 0 4px">Nearest existing constructs sharing that head:</p>'+
-          '<table><tbody>'+nb.lex.map(r=>'<tr data-i="'+r.i+'"><td>'+esc(r.n)+
+          '<table><tbody>'+nb.lex.map(r=>'<tr data-i="'+r.i+'"><td>'+esc(tc(r.n))+
             '</td><td class="num">'+r.p+' papers</td><td class="num">'+(r.f||"")+'</td></tr>').join("")+
           '</tbody></table>'
         : '<p class="note" style="margin:0">No construct in the corpus shares that head noun.</p>')+
@@ -1079,8 +1233,8 @@ async function runCheck(){
     for(const b of borrowed.slice(0,25)){
       const cl=b.rec.c;
       const label = cl==null ? '<span style="color:var(--ink-3)">no strong ties</span>'
-        : 'with '+(ties(b.rec.i).slice(0,2).map(t=>'<em>'+esc((BYI.get(t[0])||{n:"?"}).n)+'</em>').join(", ")||"others");
-      P.push('<tr data-i="'+b.rec.i+'"><td>'+esc(b.rec.n)+'</td><td class="num">'+b.rec.p+
+        : 'with '+(ties(b.rec.i).slice(0,2).map(t=>'<em>'+esc(tc((BYI.get(t[0])||{n:"?"}).n))+'</em>').join(", ")||"others");
+      P.push('<tr data-i="'+b.rec.i+'"><td>'+esc(tc(b.rec.n))+'</td><td class="num">'+b.rec.p+
         '</td><td class="num">'+b.n+'</td><td class="num">'+(b.rec.f||"")+'</td><td>'+label+'</td></tr>');
     }
     P.push('</tbody></table>');
@@ -1106,9 +1260,9 @@ async function runCheck(){
     return nodes.get(id);
   };
   for(const b of borrowed.slice(0,18))
-    add("c"+b.rec.i, b.rec.n, "paper", Math.min(9, 4+Math.log10(Math.max(b.rec.p,1))*3.2),
+    add("c"+b.rec.i, tc(b.rec.n), "paper", Math.min(9, 4+Math.log10(Math.max(b.rec.p,1))*3.2),
         {p:b.rec.p, i:b.rec.i});
-  for(const c of top) add("n"+c.k, c.k, "new", 6, {});
+  for(const c of top) add("n"+c.k, tc(c.k), "new", 6, {});
 
   /* corpus ties among the paper's own constructs, plus one ring of companions */
   const inPaper = new Set([...nodes.keys()].filter(k=>k[0]==="c").map(k=>+k.slice(1)));
@@ -1120,7 +1274,7 @@ async function runCheck(){
     for(const [j, n] of ties(i).slice(0,3)){
       if(inPaper.has(j)) continue;
       const r=BYI.get(j); if(!r) continue;
-      add("c"+j, r.n, "near", 3.6, {p:r.p, i:j});
+      add("c"+j, tc(r.n), "near", 3.6, {p:r.p, i:j});
       links.push({a:"c"+i, b:"c"+j, w:n});
     }
   }
@@ -1161,7 +1315,7 @@ async function runCheck(){
       'into the structure through your own text, which is what puts them on the map at all. A construct that nobody has used yet has no ties in the corpus, so its position comes from the company it keeps in your own sentences.'+
       (dropped.length ? ' '+dropped.length+' construct'+(dropped.length===1?'':'s')+
         ' had no tie of either kind and '+(dropped.length===1?'is':'are')+' left out of the picture: '+
-        dropped.slice(0,10).map(d=>'<em>'+esc(d.label)+'</em>').join(", ")+
+        dropped.slice(0,10).map(d=>'<em>'+esc(tc(d.label))+'</em>').join(", ")+
         (dropped.length>10?', and others':'')+'.' : '')+'</p>');
   }
 
@@ -1170,25 +1324,36 @@ async function runCheck(){
     showTab("browse"); showDetail(+tr.dataset.i);
   });
   if(nodeList.length >= 3){
-    drawNetwork(document.getElementById("figNet"), nodeList, links, {seed:11});
+    drawNetwork(document.getElementById("figNet"), nodeList, links, {seed:11, key:[
+      {fill:"var(--s1)", text:"already in the ledger"},
+      {fill:"var(--paper)", stroke:"var(--s2)", sw:2, text:"new to the ledger"},
+      {line:true, color:"var(--rule)", w:1.8, text:"travel together in the corpus"},
+      {line:true, color:"var(--s2)", dash:"3 3", text:"share a sentence in your text"}]});
     LASTNET = {nodes:nodeList, links:links};
   }
 }
 let LASTNET=null;
 
-const SAMPLE = "Between Institutional Validity and Digital Engagement: Selective Weaving and "+
-  "Linguistic Field Compression in Digital Environments\n\n"+
-  "Digital communication environments have become saturated with misinformation, which has "+
-  "altered how organizations signal and acquire legitimacy. We argue that organizations at "+
-  "different validity positions engage in selective weaving, combining the communicative "+
-  "practices of highly validated organizations with the engagement practices of low validity "+
-  "sources. The result is linguistic field compression: the stylistic distance between "+
-  "organizations at different validity positions narrows, even though their journalistic "+
-  "practices do not converge. We test linguistic field compression on a corpus of news "+
-  "organizations and show that selective weaving is strongest among medium-validity "+
-  "organizations, where institutional validity and digital engagement pull hardest against "+
-  "each other. Linguistic field compression therefore explains why audience attention and "+
-  "organizational legitimacy can decouple in digital environments.";
+const SAMPLE = "Evaluative Drift and Audience Calibration: How Firms Answer Raters They "+
+  "Cannot Ignore\n\n"+
+  "Third-party raters now score firms on everything from governance to emissions, and firms "+
+  "answer them. We argue that the answer is rarely a change in substance. Instead firms engage "+
+  "in audience calibration, adjusting what they disclose and how they word it so that the "+
+  "measured construct moves while the underlying practice does not. Repeated across rating "+
+  "cycles, audience calibration produces evaluative drift: the rated construct and the practice "+
+  "it was built to capture come apart, and the rating stops carrying the information that made "+
+  "it useful. We develop the argument in three steps. First, we show that firms with greater "+
+  "absorptive capacity read the rater's methodology faster and begin audience calibration "+
+  "earlier, so absorptive capacity predicts the onset of evaluative drift rather than any "+
+  "improvement in performance. Secondly, we argue that organizational legitimacy and corporate "+
+  "social performance diverge under evaluative drift, because legitimacy follows the rating "+
+  "while corporate social performance follows the practice. Thirdly, we show that institutional "+
+  "pressures accelerate audience calibration when raters disagree with one another, since "+
+  "disagreement widens the room for interpretation. Evaluative drift explains why firm "+
+  "performance and the ratings meant to anticipate it decouple over time, and why environmental "+
+  "uncertainty makes the decoupling harder for any single rater to detect. We discuss what "+
+  "evaluative drift implies for organizational learning, knowledge transfer across raters, and "+
+  "the dynamic capabilities literature.";
 
 /* ------------------------------------------------------------------ tabs */
 function showTab(p){
