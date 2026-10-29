@@ -391,7 +391,7 @@ def main():
             pos += disp * cap[:, None] * 0.05
         return pos
 
-    K = 15.0          # one spacing constant for every island, so a bigger
+    K = 11.5          # one spacing constant for every island, so a bigger
                       # neighbourhood occupies more of the canvas
 
     def island(m, e_list, seed):
@@ -435,7 +435,7 @@ def main():
         comp_edges[index_of[x]].append((x, y, n))
 
     tiles = []
-    MIN_ISLAND = 3     # a pair on its own says little and costs a lot of canvas
+    MIN_ISLAND = 4     # a pair or a triple says little and costs a lot of canvas
     for ci, g in enumerate(groups):
         if len(g) < MIN_ISLAND:
             continue
@@ -447,7 +447,7 @@ def main():
         tiles.append([ci, ids, pos, float(pos[:, 0].max()) + K, float(pos[:, 1].max()) + K])
 
     tiles.sort(key=lambda t: -(t[3] * t[4]))
-    CANVAS = 1120.0
+    CANVAS = 1480.0
     x_cur = y_cur = shelf = 0.0
     placed = {}
     for ci, ids, pos, bw, bh in tiles:
@@ -549,6 +549,7 @@ def main():
                   "nodes": dense_layout, "edges": dense_show,
                   "n_edges_all": len(dense_edges),
                   "big_hoods": len(big_hoods), "big_min": BIG},
+        "version": 4,
         "map": {"w": round(total_w, 1), "h": round(total_h, 1), "nodes": layout_nodes,
                 "min_island": MIN_ISLAND,
                 "drawn": len(layout_nodes), "tied": len(cluster_of)},

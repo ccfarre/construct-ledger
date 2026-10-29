@@ -10,7 +10,7 @@
 <style>
 :root{
   color-scheme: light;
-  --paper:#f5f6f3; --panel:#fffffe; --wash:#eceeea; --rule:#d7dad2; --rule-soft:#e6e8e2;
+  --paper:#ffffff; --panel:#ffffff; --wash:#f4f5f6; --rule:#d9dcde; --rule-soft:#e8eaec;
   --ink:#14181a; --ink-2:#4b545a; --ink-3:#7d868b;
   --s1:#00897b; --s2:#c1440e; --mark:#ffeec2;
   --serif:"Newsreader","Iowan Old Style",Palatino,Georgia,serif;
@@ -250,7 +250,7 @@ em{font-style:italic}
 
   <h2>The map of the construct space</h2>
   <figure>
-    <svg id="figMap" class="net" viewBox="0 0 1135 1153" role="img"
+    <svg id="figMap" class="net" viewBox="0 0 1491 572" role="img"
          aria-label="Map of the constructs that co-occur across the corpus"></svg>
     <figcaption><span class="fn">Figure 6</span><b>The constructs of management theory, as the
     corpus uses them.</b>
@@ -567,12 +567,14 @@ function drawFigures(){
    same for every reader. */
 function drawMap(){
   const svg = document.getElementById("figMap");
-  if(!svg || !GRAPH || !GRAPH.map) return;
+  if(!svg) return;
+  if(!GRAPH || !GRAPH.map){ staleData(svg, "the map coordinates"); return; }
   clear(svg);
   const M = GRAPH.map;
-  svg.setAttribute("viewBox", "0 0 " + M.w + " " + M.h);
+  const TOP = 46;                       // a clear strip for the key
+  svg.setAttribute("viewBox", "0 0 " + M.w + " " + (M.h + TOP));
   const at = new Map();
-  for(const [i,x,y,p,c] of M.nodes) at.set(i, {i,x,y,p,c});
+  for(const [i,x,y,p,c] of M.nodes) at.set(i, {i,x:x,y:y+TOP,p,c});
   for(const e of GRAPH.edges){
     const a=at.get(e[0]), b=at.get(e[1]);
     if(!a||!b) continue;
@@ -608,14 +610,13 @@ function drawMap(){
     const top=Math.min(...g.map(d=>d.y));
     lab.push({x:cx,y:top-9,r:2,label:tc(rec.n),kind:"paper"});
   }
-  placeLabels(svg, lab.map(d=>({x:d.x,y:d.y,r:1})), lab, M.w, M.h);
   drawKey(svg, [
     {fill:"var(--s1)", text:"used in five or more papers"},
     {fill:"var(--paper)", stroke:"var(--ink-3)", sw:1, r:3.5, text:"used in fewer"},
     {line:true, color:"var(--rule)", w:1.6, text:"appear together far above chance"}],
-    14, M.h-54);
-  txt(svg, 14, 18, "Each cluster is a group of constructs that keep company with one another",
-      "an", "start");
+    14, 18);
+  placeLabels(svg, lab.map(d=>({x:d.x,y:d.y,r:1})), lab, M.w, M.h+TOP, false,
+              [{x0:0,y0:0,x1:220,y1:72}]);
   const est=[...at.values()].filter(d=>d.p>=5).length;
   const note=document.getElementById("mapNote");
   if(note) note.innerHTML =
@@ -629,9 +630,19 @@ function drawMap(){
     "together and with nothing else.";
 }
 
+function staleData(svg, what){
+  if(!svg) return;
+  clear(svg);
+  svg.setAttribute("viewBox","0 0 640 110");
+  txt(svg,20,44,"This figure needs a newer data file than the one in data/mgmt.","kl","start");
+  txt(svg,20,64,"Rebuild or re-upload the data folder alongside this page; "+what+
+                " is missing from graph.json.","kl","start");
+  txt(svg,20,90,"Everything else on the page is unaffected.","an","start");
+}
 function drawDense(){
   const svg=document.getElementById("figDense");
-  if(!svg || !GRAPH || !GRAPH.dense) return;
+  if(!svg) return;
+  if(!GRAPH || !GRAPH.dense){ staleData(svg, "the field network"); return; }
   clear(svg);
   const D=GRAPH.dense;
   svg.setAttribute("viewBox","0 0 "+(D.w+24)+" "+(D.h+24));
@@ -661,12 +672,12 @@ function drawDense(){
   const top=[...at.values()].sort((a,b)=>b.deg-a.deg).slice(0,16)
     .map(d=>({x:d.x,y:d.y,r:Math.max(2.2,Math.min(11,1.8+Math.sqrt(d.deg)*0.75)),
               label:tc((BYI.get(d.i)||{n:"?"}).n), kind:"paper"}));
-  placeLabels(svg, [], top, D.w+24, D.h+24, true,
-    [{x0:0,y0:0,x1:232,y1:84}]);
   drawKey(svg,[
     {fill:"var(--s2)", text:"the most connected constructs"},
     {fill:"var(--s1)", text:"the rest"},
     {line:true, color:"var(--rule)", w:1.5, text:"two or more papers assert both"}], 14, 22);
+  placeLabels(svg, [], top, D.w+24, D.h+24, true,
+    [{x0:0,y0:0,x1:232,y1:84}]);
   const note=document.getElementById("denseNote");
   if(note) note.innerHTML =
     "Every construct here is used in at least five papers, and "+fmt(D.n_edges_all)+
@@ -677,7 +688,8 @@ function drawDense(){
 
 function drawBridges(){
   const svg=document.getElementById("figBridge");
-  if(!svg || !GRAPH || !GRAPH.dense) return;
+  if(!svg) return;
+  if(!GRAPH || !GRAPH.dense){ staleData(svg, "the crossing measure"); return; }
   clear(svg);
   const D=GRAPH.dense;
   const rows=D.nodes
@@ -1009,9 +1021,10 @@ function drawNetwork(svg, nodes, links, opts){
   const order = nodes.slice().sort((a,b)=>
     (a.kind==="new"?0:a.kind==="paper"?1:2) - (b.kind==="new"?0:b.kind==="paper"?1:2)
     || (b.p||0)-(a.p||0));
-  placeLabels(svg, nodes,
-    order.filter(d=>d.label && (opts.labelAll || d.kind!=="near")), W, H);
   if(opts.key) drawKey(svg, opts.key, 12, 20);
+  placeLabels(svg, nodes,
+    order.filter(d=>d.label && (opts.labelAll || d.kind!=="near")), W, H, false,
+    opts.key ? [{x0:0,y0:0,x1:218,y1:opts.key.length*16+22}] : null);
 }
 
 /* ----------------------------------------------------------------- check */
