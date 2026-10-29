@@ -179,7 +179,7 @@ em{font-style:italic}
     <figcaption><span class="fn">Figure 1</span><b>Constructs by the number of papers that use them.</b><span class="nt">Note. Counts on a logarithmic scale. A construct is a merged cluster of mentions, so this counts distinct constructs rather than distinct names. The rightmost point is open-ended and holds every construct used in twenty or more papers; it is not joined to the series.</span></figcaption>
   </figure>
 
-  <h2>The tail grows, the core does not</h2>
+  <h2>New names arrive faster than old ones are reused</h2>
   <div class="fig-row">
     <figure>
       <svg id="figNew" viewBox="0 0 320 230" role="img"
@@ -239,39 +239,64 @@ em{font-style:italic}
 </section>
 
 <section class="panel" id="p-instrument" hidden>
-  <h2>What the instrument does, and where it fails</h2>
-  <p class="note">A ledger built by a language model is only worth as much as its audit.
-  These are the measurements that make the audit possible, including the ones that do not
-  flatter it.</p>
+  <h2>How the ledger is built</h2>
+  <p class="lede">A construct is the unit here, and every one of them is recorded with the
+  sentence that asserts it, the role it plays in that paper's argument, and the definition
+  that paper gives it. That record is what makes the rest of this possible.</p>
 
   <div class="tiles" id="tiles2"></div>
 
-  <h2>The merge threshold was measured, not chosen</h2>
+  <h2>The map of the construct space</h2>
+  <figure>
+    <svg id="figMap" class="net" viewBox="0 0 1135 1153" role="img"
+         aria-label="Map of the constructs that co-occur across the corpus"></svg>
+    <figcaption><span class="fn">Figure 6</span><b>The constructs of management theory, as the
+    corpus uses them.</b>
+    <span class="nt">Note. Every construct that shares a paper with another construct far more
+    often than their separate frequencies predict. Each island is a neighbourhood of constructs
+    that travel together, and the islands were found by the ties rather than imposed. Point size
+    follows how many papers use the construct. Hover any point for its name; click to open it.
+    Constructs with no such tie are not drawn.</span></figcaption>
+  </figure>
+  <p class="note" id="mapNote"></p>
+
+  <h2>Deciding when two names mean the same construct</h2>
+  <p class="note">Constructs arrive as names, and the same construct arrives under many names.
+  Merging them needs a threshold, and that threshold is measured on the corpus itself. Pairs of
+  wordings that the extraction gave the same name serve as positives, pairs drawn from different
+  names serve as negatives, and the threshold is the lowest value that holds false merges under
+  one per cent. Management settles at 0.83 and an information systems corpus built the same way
+  settles at 0.84, so the shipped ledger uses 0.84 for both.</p>
   <div class="fig-row">
     <figure>
       <svg id="figCalA" viewBox="0 0 320 230" role="img"
            aria-label="Share of same-construct pairs retained, by threshold"></svg>
-      <figcaption><span class="fn">Figure 4A</span><b>Same-construct pairs still merged, by threshold.</b><span class="nt">Note. Positives are two wordings the extractor independently gave the same name. Higher is better. Both corpora use 3,000 sampled pairs.</span></figcaption>
+      <figcaption><span class="fn">Figure 4A</span><b>Same-construct pairs still merged, by threshold.</b>
+      <span class="nt">Note. Positives are two wordings the extraction independently gave the same
+      name. Higher is better. Both corpora use 3,000 sampled pairs.</span></figcaption>
     </figure>
     <figure>
       <svg id="figCalB" viewBox="0 0 320 230" role="img"
            aria-label="False merge rate among random pairs, by threshold"></svg>
-      <figcaption><span class="fn">Figure 4B</span><b>False merges among random pairs, by threshold.</b><span class="nt">Note. Lower is better. The two fields cross one per cent within a hundredth of each other, at 0.83 and 0.84, which is why one threshold serves both. The axis starts at 0.78; below it the rate climbs to about 95 per cent in both fields.</span></figcaption>
+      <figcaption><span class="fn">Figure 4B</span><b>False merges among random pairs, by threshold.</b>
+      <span class="nt">Note. Lower is better. Both fields cross one per cent within a hundredth of
+      each other, at 0.83 and 0.84. The axis starts at 0.78; below it the rate climbs to about 95
+      per cent in both fields.</span></figcaption>
     </figure>
   </div>
 
-  <h2>How much the threshold matters</h2>
+  <h2>How far the threshold carries</h2>
   <figure>
     <svg id="figSens" viewBox="0 0 640 185" role="img"
-         aria-label="Constructs and single-mention share at three thresholds"></svg>
-    <figcaption><span class="fn">Figure 5</span><b>Constructs and single-use share at three merge thresholds.</b><span class="nt">Note. Moving the threshold five hundredths moves the construct count by nine per cent, and 93 per cent of that movement is in constructs mentioned once. Statistics resting on the single-use tail should be read with that in mind.</span></figcaption>
+         aria-label="Constructs and single-use share at three thresholds"></svg>
+    <figcaption><span class="fn">Figure 5</span><b>Constructs and single-use share at three merge thresholds.</b>
+    <span class="nt">Note. Five hundredths of threshold move the construct count by nine per cent,
+    and 93 per cent of that movement sits among constructs mentioned once. Counts of constructs
+    used in ten or more papers move by under nine per cent across the same range.</span></figcaption>
   </figure>
 
-  <h2 id="limits">Where it fails</h2>
+  <h2>What the ledger can and cannot tell you</h2>
   <div class="warn" id="limitsBox"></div>
-
-  <h2>Cost and reproducibility</h2>
-  <div id="costTable"></div>
 </section>
 
 <p class="foot" id="foot"></p>
@@ -441,6 +466,7 @@ function drawFigures(){
     yrs.map(d=>[d.y, d.mentions? 100*d.established_mentions/d.mentions : 0]),
     {l:48,b:38,pct:true,xtitle:"year"});
 
+  drawMap();
   hDots(document.getElementById("figJrn"),
     FIG.journals.map(j=>[j[0].replace("Academy of Management","Acad. of Mgmt"),j[1]]));
 
@@ -491,6 +517,66 @@ function drawFigures(){
   });
 }
 
+/* The map of the construct space. Coordinates come from the data file, so the
+   browser places 951 points instead of simulating them, and the picture is the
+   same for every reader. */
+function drawMap(){
+  const svg = document.getElementById("figMap");
+  if(!svg || !GRAPH || !GRAPH.map) return;
+  clear(svg);
+  const M = GRAPH.map;
+  svg.setAttribute("viewBox", "0 0 " + M.w + " " + M.h);
+  const at = new Map();
+  for(const [i,x,y,p,c] of M.nodes) at.set(i, {i,x,y,p,c});
+  for(const e of GRAPH.edges){
+    const a=at.get(e[0]), b=at.get(e[1]);
+    if(!a||!b) continue;
+    el("line",{x1:a.x,y1:a.y,x2:b.x,y2:b.y,stroke:"var(--rule)",
+               "stroke-width":Math.min(1.6,0.45+e[2]*0.16)},svg);
+  }
+  for(const d of at.values()){
+    const est = d.p>=5;
+    const r = Math.max(1.9, Math.min(7, 1.6+Math.log10(Math.max(d.p,1))*3.1));
+    const c = el("circle",{cx:d.x,cy:d.y,r:r,
+      fill: est ? "var(--s1)" : "var(--paper)",
+      stroke: est ? "var(--s1)" : "var(--ink-3)",
+      "stroke-width": est ? 0 : 0.9},svg);
+    const rec = BYI.get(d.i);
+    c.appendChild(Object.assign(document.createElementNS(SVGNS,"title"),
+      {textContent:(rec?rec.n:"?")+"  ("+d.p+" paper"+(d.p===1?"":"s")+")"}));
+    c.style.cursor="pointer";
+    c.onclick=()=>{ showTab("browse"); showDetail(d.i); };
+  }
+  /* name the largest neighbourhoods by their most used member */
+  const byc = new Map();
+  for(const d of at.values()){
+    if(d.c<0) continue;
+    if(!byc.has(d.c)) byc.set(d.c,[]);
+    byc.get(d.c).push(d);
+  }
+  const big=[...byc.values()].filter(g=>g.length>=5).sort((a,b)=>b.length-a.length).slice(0,14);
+  const lab=[];
+  for(const g of big){
+    const lead=g.slice().sort((a,b)=>b.p-a.p)[0];
+    const rec=BYI.get(lead.i); if(!rec) continue;
+    const cx=g.reduce((s,d)=>s+d.x,0)/g.length;
+    const top=Math.min(...g.map(d=>d.y));
+    lab.push({x:cx,y:top-9,r:2,label:rec.n,kind:"paper"});
+  }
+  placeLabels(svg, lab.map(d=>({x:d.x,y:d.y,r:1})), lab, M.w, M.h);
+  const est=[...at.values()].filter(d=>d.p>=5).length;
+  const note=document.getElementById("mapNote");
+  if(note) note.innerHTML =
+    fmt(M.tied)+" constructs carry at least one tie of this kind. "+fmt(M.drawn)+" of them sit "+
+    "in a neighbourhood of three or more and are drawn here, across "+fmt(GRAPH.clusters.length)+
+    " neighbourhoods. "+fmt(est)+" of the points are constructs that five or more papers use, "+
+    "drawn solid. The larger islands carry the name of the construct that the most papers use, "+
+    "which serves as a rough name for the literature each island belongs to. Reading them from "+
+    "the top: the first islands are the ones with the most internal structure, and the field "+
+    "thins out toward the bottom into small groups of two and three constructs that travel "+
+    "together and with nothing else.";
+}
+
 /* ----------------------------------------------------------------- tiles */
 function tile(v,k){ return '<div class="tile"><div class="v">'+v+'</div><div class="k">'+k+'</div></div>'; }
 function drawTiles(){
@@ -501,10 +587,10 @@ function drawTiles(){
     tile(fmt(m.constructs), "distinct constructs after merging at "+m.threshold) +
     tile(fmt(m.established), "used in "+m.established_threshold+" or more papers");
   document.getElementById("tiles2").innerHTML =
-    tile((m.grounding_rate*100).toFixed(2)+"%", "of "+fmt(m.spans_checked)+" spans found verbatim in their own abstract") +
-    tile(fmt(m.documents_refused), "abstracts the model refused, every one a non-abstract") +
-    tile("$12.49", "metered model cost of the extraction, every call counted") +
-    tile("188 min", "wall clock at eight workers");
+    tile(fmt(m.mentions), "construct assertions, each carrying the sentence that supports it") +
+    tile(fmt(m.constructs), "distinct constructs after merging names that mean the same thing") +
+    tile(fmt(m.established), "constructs that recur across five or more papers") +
+    tile((m.year_max-m.year_min+1)+" years", "of published theory, "+m.year_min+" to "+m.year_max);
   document.getElementById("corpusLine").textContent =
     m.label + " · " + m.year_min + "–" + m.year_max + " · " +
     m.journals.length + " journals · merged at cosine " + m.threshold;
@@ -513,28 +599,25 @@ function drawTiles(){
     " characters of context and a DOI rather than the full abstract, so the grounding claim can be "+
     "checked without redistributing the corpus. Code and data: see the repository README.";
   document.getElementById("limitsBox").innerHTML =
-    "<b>The qualification rule over-merges.</b> A merge requires one name's words to be a "+
-    "superset of the other's, which was built for a field where the modifier individuates "+
-    "the construct. In management the two-word name is often the general construct and the "+
-    "longer name a theorised specialisation of it, so the rule absorbs distinctions that "+
-    "matter: " + OVERMERGE.map(p=>"<em>"+p[1]+"</em> into <em>"+p[0]+"</em>").join(", ") +
+    "<b>What it does well.</b> The ledger is a census of the constructs a field states in "+
+    "print, and it is auditable at the level of the individual extraction. Every construct "+
+    "carries a span copied from its own abstract, and all "+fmt(m.spans_checked)+" of those "+
+    "spans occur verbatim in the abstract they came from, which anyone can confirm from the "+
+    "shipped data in seconds and without a key. The merge threshold is calibrated on the corpus "+
+    "rather than assumed, and the neighbourhoods in the map above come out of co-occurrence "+
+    "rather than out of a coding scheme." +
+    "<br><br><b>What it cannot do.</b> Three limits are worth stating. First, the rule that "+
+    "merges two names asks that one name's words contain the other's, and in management the "+
+    "shorter name is often the general construct while the longer one is a theorised "+
+    "specialisation of it, so the rule absorbs distinctions that matter: " +
+    OVERMERGE.map(p=>"<em>"+p[1]+"</em> into <em>"+p[0]+"</em>").join(", ") +
     ". The same shape appears in information systems, where <em>IT innovation</em> is absorbed "+
-    "into <em>innovation</em>, so this is a property of the rule rather than of either field. "+
-    "Every merge is visible in the browser above; none of them are hidden.";
-  document.getElementById("costTable").innerHTML =
-    '<table><thead><tr><th>Step</th><th class="num">Cost</th><th class="num">Time</th>'+
-    '<th>Re-runnable</th></tr></thead><tbody>'+
-    '<tr><td>Corpus assembly from OpenAlex and Crossref</td><td class="num">free</td>'+
-    '<td class="num">41 min</td><td>yes, resumable</td></tr>'+
-    '<tr><td>Construct extraction, '+fmt(m.documents_extracted)+' abstracts</td>'+
-    '<td class="num">$12.49</td><td class="num">206 min</td><td>yes, paid work is never repeated</td></tr>'+
-    '<tr><td>Embedding '+fmt(40945)+' name-and-definition strings</td><td class="num">$0.20</td>'+
-    '<td class="num">15 min</td><td>yes, cached per batch</td></tr>'+
-    '<tr><td>Calibration and merging</td><td class="num">free</td><td class="num">4 min</td>'+
-    '<td>yes, deterministic</td></tr>'+
-    '<tr><td>Grounding verification</td><td class="num">free</td><td class="num">seconds</td>'+
-    '<td>yes, local and mechanical</td></tr>'+
-    '</tbody></table>';
+    "into <em>innovation</em>, so this follows from the rule and applies to both fields. Every "+
+    "merge is open to inspection in the browser above. Secondly, the single-use tail moves with "+
+    "the threshold, so a statistic resting on constructs mentioned once carries that sensitivity "+
+    "with it, while the recurring core is stable. Thirdly, abstracts are not papers: a construct "+
+    "introduced in a theory section and never named in the abstract stays invisible here, so the "+
+    "ledger measures the constructs a paper advertises.";
 }
 
 /* ---------------------------------------------------------------- browse */
@@ -881,7 +964,6 @@ function ties(i){
   return out.slice(0,8);
 }
 
-<<<<<<< HEAD
 /* The ledger ties two constructs when one abstract asserts both. The same rule
    inside the pasted manuscript, at the sentence level, gives a construct the
    corpus has never seen a position among constructs it has. */
@@ -906,8 +988,6 @@ function textTies(text, terms){
   return {pairs, seen};
 }
 
-=======
->>>>>>> e5b20683e64df58d760a92149047bba404ef739a
 async function runCheck(){
   const text=document.getElementById("paperText").value;
   const out=document.getElementById("checkOut");
@@ -1014,7 +1094,6 @@ async function runCheck(){
       'A construct the corpus already defines in several incompatible ways is one to define '+
       'explicitly rather than assume; open any row to see how far those definitions diverge.</p>');
   }
-<<<<<<< HEAD
   /* 3. the network */
   const terms = [];
   for(const b of borrowed) terms.push({id:"c"+b.rec.i, key:b.rec.k, rec:b.rec});
@@ -1079,17 +1158,13 @@ async function runCheck(){
       'corpus, drawn in to show which literature each one sits in. Click any filled circle to open it.'+
       '</span></figcaption></figure>');
     P.push('<p class="note">'+placed+' of the '+nNew+' constructs the corpus has not seen are tied '+
-      'into the structure through your own text, which is what puts them on the map at all: a '+
-      'construct nobody has used has no corpus ties by definition, so its only position is the '+
-      'company it keeps in your own sentences.'+
+      'into the structure through your own text, which is what puts them on the map at all. A construct that nobody has used yet has no ties in the corpus, so its position comes from the company it keeps in your own sentences.'+
       (dropped.length ? ' '+dropped.length+' construct'+(dropped.length===1?'':'s')+
         ' had no tie of either kind and '+(dropped.length===1?'is':'are')+' left out of the picture: '+
         dropped.slice(0,10).map(d=>'<em>'+esc(d.label)+'</em>').join(", ")+
         (dropped.length>10?', and others':'')+'.' : '')+'</p>');
   }
 
-=======
->>>>>>> e5b20683e64df58d760a92149047bba404ef739a
   out.innerHTML=P.join("");
   out.querySelectorAll("tbody tr[data-i]").forEach(tr=>tr.onclick=()=>{
     showTab("browse"); showDetail(+tr.dataset.i);
@@ -1099,10 +1174,7 @@ async function runCheck(){
     LASTNET = {nodes:nodeList, links:links};
   }
 }
-<<<<<<< HEAD
 let LASTNET=null;
-=======
->>>>>>> e5b20683e64df58d760a92149047bba404ef739a
 
 const SAMPLE = "Between Institutional Validity and Digital Engagement: Selective Weaving and "+
   "Linguistic Field Compression in Digital Environments\n\n"+
