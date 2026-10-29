@@ -881,6 +881,7 @@ function ties(i){
   return out.slice(0,8);
 }
 
+<<<<<<< HEAD
 /* The ledger ties two constructs when one abstract asserts both. The same rule
    inside the pasted manuscript, at the sentence level, gives a construct the
    corpus has never seen a position among constructs it has. */
@@ -905,6 +906,8 @@ function textTies(text, terms){
   return {pairs, seen};
 }
 
+=======
+>>>>>>> e5b20683e64df58d760a92149047bba404ef739a
 async function runCheck(){
   const text=document.getElementById("paperText").value;
   const out=document.getElementById("checkOut");
@@ -1011,6 +1014,7 @@ async function runCheck(){
       'A construct the corpus already defines in several incompatible ways is one to define '+
       'explicitly rather than assume; open any row to see how far those definitions diverge.</p>');
   }
+<<<<<<< HEAD
   /* 3. the network */
   const terms = [];
   for(const b of borrowed) terms.push({id:"c"+b.rec.i, key:b.rec.k, rec:b.rec});
@@ -1084,6 +1088,8 @@ async function runCheck(){
         (dropped.length>10?', and others':'')+'.' : '')+'</p>');
   }
 
+=======
+>>>>>>> e5b20683e64df58d760a92149047bba404ef739a
   out.innerHTML=P.join("");
   out.querySelectorAll("tbody tr[data-i]").forEach(tr=>tr.onclick=()=>{
     showTab("browse"); showDetail(+tr.dataset.i);
@@ -1093,7 +1099,10 @@ async function runCheck(){
     LASTNET = {nodes:nodeList, links:links};
   }
 }
+<<<<<<< HEAD
 let LASTNET=null;
+=======
+>>>>>>> e5b20683e64df58d760a92149047bba404ef739a
 
 const SAMPLE = "Between Institutional Validity and Digital Engagement: Selective Weaving and "+
   "Linguistic Field Compression in Digital Environments\n\n"+

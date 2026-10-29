@@ -31,12 +31,17 @@ The site lets a reader do four things:
    which are recurring terms that appear nowhere in the corpus as a construct name, each
    placed by its head-noun family and nearest existing neighbours; and the constructs it
    borrows, with the empirical neighbourhood each one belongs to.
+<<<<<<< HEAD
 3. **See the network.** Reading a paper draws the constructs it works with, the corpus
    ties among them, and the ties observed inside the manuscript itself, which is what
    gives a construct the corpus has never seen a position among constructs it has.
    Browsing a construct draws the company it keeps.
 4. **Browse 23,522 constructs**, with every name that was merged into each one.
 5. **Check the grounding** for any construct, with the span highlighted in its context and
+=======
+3. **Browse 23,522 constructs**, with every name that was merged into each one.
+4. **Check the grounding** for any construct, with the span highlighted in its context and
+>>>>>>> e5b20683e64df58d760a92149047bba404ef739a
    a DOI to the source.
 
 ## The corpus
