@@ -59,13 +59,13 @@ address, and nine cases where the publisher deposited an acknowledgements footno
 rights notice, an epigraph or an author list in place of the abstract. The model returned
 nothing in exactly the cases where there was nothing to return, and nowhere else.
 
-## The merge threshold was measured, not chosen
+## Deciding when two names mean the same construct
 
 Constructs are merged when two names denote the same thing. Doing that by exact name
 leaves most of the space as one-off phrasing, so merging uses embedding similarity plus a
-qualification rule. The threshold was calibrated rather than picked: positives are pairs
+qualification rule. The threshold is calibrated on the corpus itself. Positives are pairs
 of wordings the extractor independently gave the same name, negatives are random pairs,
-and the threshold is the lowest value holding false merges under one percent.
+and the threshold is the lowest value that holds false merges under one percent.
 
 | Corpus | Calibrated threshold | Same-construct pairs retained | False merges |
 |---|---|---|---|
@@ -76,9 +76,9 @@ The two fields separate at essentially the same cosine, and their random-pair
 distributions are nearly identical (medians 0.756 and 0.751), so one threshold serves
 both. The shipped ledger uses **0.84**, the stricter of the two.
 
-## Where it fails
+## What the ledger cannot do
 
-Three limits, all of them visible in the data rather than argued away.
+Three limits, each of them visible in the shipped data.
 
 **The qualification rule over-merges.** A merge requires one name's word set to be a
 superset of the other's, a rule built for a field where the modifier individuates the

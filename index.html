@@ -70,7 +70,7 @@ h3.sec{font-family:var(--sans);font-size:11.5px;letter-spacing:.09em;text-transf
 
 /* figures, journal style */
 figure{margin:20px 0 30px;padding:0;max-width:780px}
-figure.tall{max-width:560px}
+figure.tall{max-width:430px}
 figcaption{font-size:13.5px;color:var(--ink-2);margin-top:10px;max-width:none;line-height:1.5;
   padding-top:8px;border-top:1px solid var(--rule-soft)}
 figcaption .fn{font-family:var(--sans);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
@@ -252,7 +252,7 @@ em{font-style:italic}
 
   <h2>Every construct the field returns to</h2>
   <figure class="tall">
-    <svg id="figDense" class="net" viewBox="0 0 432 494" role="img"
+    <svg id="figDense" class="net" viewBox="0 0 516 518" role="img"
          aria-label="Network of all constructs used in five or more papers"></svg>
     <figcaption><span class="fn">Figure 6</span><b>The 1,081 constructs that five or more papers use, and how they travel.</b>
     <span class="nt">Note. A line joins two constructs that at least two papers assert together.
@@ -263,7 +263,7 @@ em{font-style:italic}
 
   <h2>How the field clusters</h2>
   <figure>
-    <svg id="figMap" class="net" viewBox="0 0 750 386" role="img"
+    <svg id="figMap" class="net" viewBox="0 0 750 382" role="img"
          aria-label="Map of the constructs that co-occur across the corpus"></svg>
     <figcaption><span class="fn">Figure 7</span><b>Nine neighbourhoods, each named by the construct that the most papers use.</b>
     <span class="nt">Note. A neighbourhood is a set of constructs that keep company with one
@@ -276,16 +276,22 @@ em{font-style:italic}
 
   <h2>Constructs that cross between literatures</h2>
   <figure>
-    <svg id="figBridge" class="net" viewBox="0 0 760 330" role="img"
-         aria-label="Constructs that connect separate neighbourhoods"></svg>
-    <figcaption><span class="fn">Figure 8</span><b>The constructs that reach into the most separate neighbourhoods.</b>
-    <span class="nt">Note. Counting every neighbourhood a construct touches simply recovers how
-    common it is, since the commonest constructs touch almost all of them. These are ranked by how
-    many substantial neighbourhoods a construct reaches set against how much company it keeps in
-    total, which surfaces constructs that cross literatures without being ubiquitous. A construct
-    high on this list carries different meanings in different places, and is worth defining
-    explicitly wherever it is used.</span></figcaption>
+    <div class="fig-row" style="max-width:none;gap:18px">
+      <svg id="figBridge" class="net" viewBox="0 0 430 330" role="img"
+           aria-label="Constructs ranked by how many neighbourhoods they reach"></svg>
+      <svg id="figBridgeEx" class="net" viewBox="0 0 430 330" role="img"
+           aria-label="One construct and the neighbourhoods it reaches"></svg>
+    </div>
+    <figcaption><span class="fn">Figure 8</span><b>Which constructs cross between literatures, and what crossing looks like.</b>
+    <span class="nt">Note. Panel A takes the twelve constructs that reach the most
+    neighbourhoods for the amount of company they keep, which is what keeps a construct that is
+    simply everywhere out of the list, and ranks them by the number of neighbourhoods each one
+    reaches. Panel B takes one of them and draws what that means: the construct at the centre, and
+    the separate neighbourhoods it keeps company with around it, each named by its own leading
+    construct. A construct like this carries different meanings in different places,
+    and is worth defining explicitly wherever it appears.</span></figcaption>
   </figure>
+  <p class="note" id="bridgeNote"></p>
 
   <h2>Deciding when two names mean the same construct</h2>
   <p class="note">Constructs arrive as names, and the same construct arrives under many names.
@@ -513,6 +519,7 @@ function drawFigures(){
   drawMap();
   drawDense();
   drawBridges();
+  drawBridgeExample();
   hDots(document.getElementById("figJrn"),
     FIG.journals.map(j=>[j[0].replace("Academy of Management","Acad. of Mgmt"),j[1]]));
 
@@ -572,7 +579,7 @@ function drawMap(){
   if(!GRAPH || !GRAPH.map){ staleData(svg, "the map coordinates"); return; }
   clear(svg);
   const M = GRAPH.map;
-  const TOP = 42;                       // a clear strip for the key
+  const TOP = 70;                       // a clear strip for the key
   svg.setAttribute("viewBox", "0 0 " + M.w + " " + (M.h + TOP));
   const at = new Map();
   for(const [i,x,y,p,c] of M.nodes) at.set(i, {i,x:x,y:y+TOP,p,c});
@@ -602,7 +609,7 @@ function drawMap(){
     if(!byc.has(d.c)) byc.set(d.c,[]);
     byc.get(d.c).push(d);
   }
-  const big=[...byc.values()].filter(g=>g.length>=5).sort((a,b)=>b.length-a.length).slice(0,14);
+  const big=[...byc.values()].filter(g=>g.length>=5).sort((a,b)=>b.length-a.length).slice(0,12);
   const lab=[];
   for(const g of big){
     const lead=g.slice().sort((a,b)=>b.p-a.p)[0];
@@ -616,8 +623,10 @@ function drawMap(){
     {fill:"var(--paper)", stroke:"var(--ink-3)", sw:1, r:3.5, text:"used in fewer"},
     {line:true, color:"var(--rule)", w:1.6, text:"appear together far above chance"}],
     14, 18);
-  placeLabels(svg, lab.map(d=>({x:d.x,y:d.y,r:1})), lab, M.w, M.h+TOP, false,
-              [{x0:0,y0:0,x1:200,y1:66}]);
+  const obst=[...at.values()].map(d=>({x:d.x,y:d.y,
+    r:Math.max(1.9,Math.min(7,1.6+Math.log10(Math.max(d.p,1))*3.1))}));
+  placeLabels(svg, obst, lab, M.w, M.h+TOP, false,
+              [{x0:0,y0:0,x1:206,y1:TOP-4}]);
   const est=[...at.values()].filter(d=>d.p>=5).length;
   const note=document.getElementById("mapNote");
   if(note) note.innerHTML =
@@ -663,7 +672,7 @@ function drawDense(){
       "fill-opacity": hub ? 1 : 0.62},svg);
     const rec=BYI.get(d.i);
     c.appendChild(Object.assign(document.createElementNS(SVGNS,"title"),
-      {textContent:(rec?tc(rec.n):"?")+"  ("+d.p+" papers, keeps company with "+d.deg+" constructs)"}));
+      {textContent:(rec?tc(rec.n):"?")+"  ("+d.p+(d.p===1?" paper":" papers")+", keeps company with "+d.deg+" constructs)"}));
     c.style.cursor="pointer";
     c.onclick=()=>{ showTab("browse"); showDetail(d.i); };
   }
@@ -694,14 +703,17 @@ function drawBridges(){
     .map(([i,x,y,p,deg,span,big,reach])=>({i,p,deg,span,big,reach}))
     .filter(d=>d.big>=4)
     .sort((a,b)=>b.reach-a.reach || b.big-a.big)
-    .slice(0,14);
+    .slice(0,12)
+    .sort((a,b)=>b.big-a.big || b.reach-a.reach);
   if(!rows.length) return;
   const vb=svg.getAttribute("viewBox").split(" ").map(Number);
   const W=vb[2], H=vb[3];
-  const x0=228, x1=W-104, t=20, bpad=28;
+  const x0=196, x1=W-104, t=30, bpad=26;
   const max=Math.max(...rows.map(d=>d.big));
   const X=v=>x0+(v/max)*(x1-x0);
   const dy=(H-t-bpad)/rows.length;
+  txt(svg,10,16,"A","pl","start");
+  txt(svg,24,16,"the twelve that travel furthest for the company they keep","al","start");
   rows.forEach((d,i)=>{
     const y=t+dy*(i+0.5);
     const rec=BYI.get(d.i)||{n:"?"};
@@ -712,11 +724,66 @@ function drawBridges(){
       {textContent:tc(rec.n)+": reaches "+d.big+" neighbourhoods, keeps company with "+
                    d.deg+" constructs, used in "+d.p+" papers"}));
     txt(svg,x0-10,y+3.6,tc(rec.n),"tk","end");
-    txt(svg,X(d.big)+10,y+3.6,d.big+" of "+D.big_hoods+"  ("+d.p+" papers)","dl","start")
+    txt(svg,X(d.big)+9,y+3.6,d.big+" of "+D.big_hoods,"dl","start")
       .setAttribute("fill","var(--ink-2)");
   });
   el("line",{x1:x0,x2:x0,y1:t,y2:H-bpad,class:"ax"},svg);
-  txt(svg,(x0+x1)/2,H-10,"substantial neighbourhoods the construct reaches into","al","middle");
+  txt(svg,(x0+x1)/2,H-8,"neighbourhoods reached, of "+D.big_hoods,"al","middle");
+}
+
+function drawBridgeExample(){
+  const svg=document.getElementById("figBridgeEx");
+  if(!svg) return;
+  if(!GRAPH || !GRAPH.dense || !GRAPH.dense.bridge_example){
+    staleData(svg, "the bridging example"); return;
+  }
+  clear(svg);
+  const B=GRAPH.dense.bridge_example;
+  const vb=svg.getAttribute("viewBox").split(" ").map(Number);
+  const W=vb[2], H=vb[3];
+  const cx=W/2, cy=H/2+10;
+  txt(svg,10,16,"B","pl","start");
+  txt(svg,24,16,"one construct, four literatures","al","start");
+
+  const n=B.groups.length;
+  const R=Math.min(W,H)*0.25;
+  const pts=[];
+  B.groups.forEach((g,i)=>{
+    const ang=-Math.PI/2 + 2*Math.PI*i/n;
+    const gx=cx+Math.cos(ang)*R, gy=cy+Math.sin(ang)*R;
+    g.members.forEach((m,j)=>{
+      const off=(j-(g.members.length-1)/2)*20;
+      const px=gx+Math.cos(ang+Math.PI/2)*off;
+      const py=gy+Math.sin(ang+Math.PI/2)*off;
+      pts.push({x:px,y:py,i:m[0],p:m[1],w:m[2],ang:ang,anchor:g.anchor});
+    });
+  });
+  for(const p of pts)
+    el("line",{x1:cx,y1:cy,x2:p.x,y2:p.y,stroke:"var(--rule)",
+               "stroke-width":Math.min(2.2,0.9+p.w*0.4)},svg);
+  for(const p of pts){
+    const c=el("circle",{cx:p.x,cy:p.y,r:5,fill:"var(--s1)"},svg);
+    c.style.cursor="pointer"; c.onclick=()=>{ showTab("browse"); showDetail(p.i); };
+    const rec=BYI.get(p.i)||{n:"?"};
+    c.appendChild(Object.assign(document.createElementNS(SVGNS,"title"),
+      {textContent:tc(rec.n)+"  ("+p.p+(p.p===1?" paper":" papers")+")"}));
+  }
+  el("circle",{cx:cx,cy:cy,r:9,fill:"var(--s2)"},svg);
+  /* the construct at the centre, then each literature named at its own spoke */
+  const lab=[{x:cx,y:cy,r:9,label:tc(B.name),kind:"new"}];
+  B.groups.forEach((g,i)=>{
+    const ang=-Math.PI/2 + 2*Math.PI*i/n;
+    lab.push({x:cx+Math.cos(ang)*(R+16), y:cy+Math.sin(ang)*(R+16), r:1,
+              label:tc(g.anchor), kind:"paper"});
+  });
+  placeLabels(svg, pts.map(p=>({x:p.x,y:p.y,r:5})), lab, W, H, false,
+              [{x0:0,y0:0,x1:W,y1:22}]);
+  const note=document.getElementById("bridgeNote");
+  if(note) note.innerHTML =
+    "<em>"+esc(tc(B.name))+"</em> appears in "+B.papers+" papers and keeps company with "+
+    "constructs from "+B.hoods+" separate neighbourhoods. Four of them are drawn, each named "+
+    "by its own leading construct. A construct used in only "+B.papers+" papers that reaches "+
+    "that far is doing work across literatures that otherwise do not meet.";
 }
 
 /* ----------------------------------------------------------------- tiles */
@@ -810,8 +877,15 @@ async function showDetail(i){
     '<p class="meta">'+d.p+' paper'+(d.p===1?"":"s")+' · '+d.m+
     ' mention'+(d.m===1?"":"s")+' · '+Object.entries(d.roles).map(([k,v])=>
       '<span class="pill">'+esc(k||"unlabelled")+' '+v+'</span>').join("")+'</p>'+
-    (d.forms.length>1?'<p class="note" style="margin:0 0 12px">Names merged into this construct: '+
-      d.forms.map(f=>"<em>"+esc(tc(f))+"</em>").join(", ")+'</p>':"")+
+    (function(){
+      /* the same wording can arrive under several capitalisations */
+      const seen=new Set(), shown=[];
+      for(const f of (d.forms||[])){ const t=tc(f), k=t.toLowerCase();
+        if(seen.has(k)) continue; seen.add(k); shown.push(t); }
+      return shown.length>1
+        ? '<p class="note" style="margin:0 0 12px">Names merged into this construct: '+
+          shown.map(f=>"<em>"+esc(f)+"</em>").join(", ")+'</p>' : "";
+    })()+
     '<h3 class="sec">How the corpus defines it</h3>'+
     '<p class="note" style="margin:0 0 6px">Up to five definitions that differ materially from one another.</p>'+
     defs+
@@ -962,7 +1036,7 @@ function placeLabels(svg, nodes, shown, W, H, overNodes, exclude){
     const label = d.label.length>30 ? d.label.slice(0,29)+"…" : d.label;
     const w = label.length*CH+3;
     const cands=[];
-    for(const ring of [0,1,2]){
+    for(const ring of [0,1,2,3,4]){
       const gap = d.r + 6 + ring*13;
       cands.push([ gap, 3.5,"start"], [-gap, 3.5,"end"]);
       cands.push([ gap*0.72,-gap*0.55,"start"], [-gap*0.72,-gap*0.55,"end"]);
@@ -977,6 +1051,21 @@ function placeLabels(svg, nodes, shown, W, H, overNodes, exclude){
       if(box.x0<2 || box.x1>W-2 || box.y0<2 || box.y1>H-2) continue;
       if(hit(box)) continue;
       put=[dx,dy,anc,box]; break;
+    }
+    /* nothing close by is free: look a little further out, nearest first */
+    if(!put){
+      let best=null;
+      for(let ry=-96; ry<=96; ry+=8){
+        for(let rx=-150; rx<=150; rx+=10){
+          const cx=d.x+rx, cy=d.y+ry;
+          const box={x0:cx-1,x1:cx+w+1,y0:cy-H_,y1:cy+3};
+          if(box.x0<2 || box.x1>W-2 || box.y0<2 || box.y1>H-2) continue;
+          if(hit(box)) continue;
+          const dist=Math.hypot(rx,ry);
+          if(!best || dist<best[0]) best=[dist,rx,ry,box];
+        }
+      }
+      if(best) put=[best[1],best[2],"start",best[3]];
     }
     if(!put) continue;
     taken.push(put[3]);
@@ -1013,7 +1102,7 @@ function drawNetwork(svg, nodes, links, opts){
       stroke: d.kind==="new" ? "var(--s2)" : d.kind==="paper" ? "var(--s1)" : "var(--ink-3)",
       "stroke-width": d.kind==="new" ? 2 : 1},svg);
     c.appendChild(Object.assign(document.createElementNS(SVGNS,"title"),
-      {textContent:d.label + (d.p!=null ? "  ("+d.p+" papers)" : "  (not in the ledger)")}));
+      {textContent:d.label + (d.p!=null ? "  ("+d.p+(d.p===1?" paper":" papers")+")" : "  (not in the ledger)")}));
     if(d.i!=null){ c.style.cursor="pointer"; c.onclick=()=>{ showTab("browse"); showDetail(d.i); }; }
   }
   const order = nodes.slice().sort((a,b)=>
@@ -1023,6 +1112,14 @@ function drawNetwork(svg, nodes, links, opts){
   placeLabels(svg, nodes,
     order.filter(d=>d.label && (opts.labelAll || d.kind!=="near")), W, H, false,
     opts.key ? [{x0:0,y0:0,x1:200,y1:opts.key.length*15+20}] : null);
+  /* trim the empty margin the layout leaves around the drawing */
+  try{
+    const bb=svg.getBBox(), pad=12;
+    /* keep the horizontal scale, trim only the empty strip above and below */
+    const h=Math.max(140, Math.min(H, bb.height+pad*2));
+    const y=Math.max(0, Math.min(bb.y-pad, H-h));
+    if(bb.height>10) svg.setAttribute("viewBox",vb[0]+" "+y+" "+W+" "+h);
+  }catch(e){}
 }
 
 /* ----------------------------------------------------------------- check */
@@ -1217,7 +1314,7 @@ async function runCheck(){
       (nb.lex.length
         ? '<p class="note" style="margin:0 0 4px">Nearest existing constructs sharing that head:</p>'+
           '<table><tbody>'+nb.lex.map(r=>'<tr data-i="'+r.i+'"><td>'+esc(tc(r.n))+
-            '</td><td class="num">'+r.p+' papers</td><td class="num">'+(r.f||"")+'</td></tr>').join("")+
+            '</td><td class="num">'+r.p+(r.p===1?' paper':' papers')+'</td><td class="num">'+(r.f||"")+'</td></tr>').join("")+
           '</tbody></table>'
         : '<p class="note" style="margin:0">No construct in the corpus shares that head noun.</p>')+
       '</div>');
@@ -1345,8 +1442,7 @@ async function runCheck(){
 }
 let LASTNET=null;
 
-const SAMPLE = "Evaluative Drift and Audience Calibration: How Firms Answer Raters They "+
-  "Cannot Ignore\n\n"+
+const SAMPLE = "Evaluative Drift and Audience Calibration in Third-Party Ratings\n\n"+
   "Third-party raters now score firms on everything from governance to emissions, and firms "+
   "answer them. We argue that the answer is rarely a change in substance. Instead firms engage "+
   "in audience calibration, adjusting what they disclose and how they word it so that the "+
