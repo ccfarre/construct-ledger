@@ -1,0 +1,46 @@
+{
+ "label": "Management and organization theory",
+ "documents_in_corpus": 9108,
+ "documents_extracted": 9086,
+ "documents_refused": 22,
+ "mentions": 40979,
+ "constructs": 23522,
+ "threshold": 0.84,
+ "established_threshold": 5,
+ "established": 1083,
+ "single_paper": 18896,
+ "families": 469,
+ "shards": 236,
+ "shard_size": 100,
+ "context_chars": 120,
+ "spans_shown": 6,
+ "spans_checked": 40979,
+ "spans_found_verbatim": 40979,
+ "spans_not_found": 0,
+ "grounding_rate": 1.0,
+ "spans_shipped": null,
+ "journals": [
+  [
+   "Strategic Management Journal",
+   13234
+  ],
+  [
+   "Organization Science",
+   10398
+  ],
+  [
+   "Academy of Management Journal",
+   8144
+  ],
+  [
+   "Academy of Management Review",
+   5677
+  ],
+  [
+   "Administrative Science Quarterly",
+   3526
+  ]
+ ],
+ "year_min": 1990,
+ "year_max": 2025
+}

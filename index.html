@@ -338,10 +338,13 @@ em{font-style:italic}
 <script>
 /* ------------------------------------------------------------------ data */
 const DATA = ["data/mgmt/", "data/", "./"];
+/* bumped whenever the data folder is rebuilt, so a browser holding an older
+   copy of these files fetches the new ones instead of serving its cache */
+const BUILD = "6";
 async function grab(name){
   let last;
   for (const base of DATA){
-    try { const r = await fetch(base + name); if (r.ok) return await r.json(); }
+    try { const r = await fetch(base + name + "?v=" + BUILD); if (r.ok) return await r.json(); }
     catch(e){ last = e; }
   }
   throw new Error(name + " not found (" + (last||"404") + ")");
