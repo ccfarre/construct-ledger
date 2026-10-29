@@ -24,7 +24,7 @@ spans were found verbatim in their own abstract**. That check is mechanical, it 
 it runs in seconds, and anyone can re-run it. An instrument that reports its own
 hallucination rate is a different object from one that asks to be taken on faith.
 
-The site lets a reader do four things:
+The site lets a reader do six things:
 
 1. **Read the ledger's figures**, all drawn from the shipped data rather than hand-entered.
 2. **Paste a working paper** and see two things: the constructs it appears to propose,
@@ -35,8 +35,13 @@ The site lets a reader do four things:
    ties among them, and the ties observed inside the manuscript itself, which is what
    gives a construct the corpus has never seen a position among constructs it has.
    Browsing a construct draws the company it keeps.
-4. **Browse 23,522 constructs**, with every name that was merged into each one.
-5. **Check the grounding** for any construct, with the span highlighted in its context and
+4. **Work out where to take it.** From the same reading, the site assembles the names the
+   corpus vocabulary allows and marks which are already taken, the definitions the nearest
+   constructs with the same head noun were given in print, the constructs that travel with
+   the ones the paper uses and are missing from it, and the borrowed constructs whose
+   published definitions agree least.
+5. **Browse 23,522 constructs**, with every name that was merged into each one.
+6. **Check the grounding** for any construct, with the span highlighted in its context and
    a DOI to the source.
 
 ## The corpus

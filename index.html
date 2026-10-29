@@ -1263,6 +1263,244 @@ function textTies(text, terms){
   return {pairs, seen};
 }
 
+/* ---------------------------------------------------- taking it further
+   Nothing here is invented. A name is either one the corpus has used or
+   one it has not, a definition is one some paper actually wrote, and a
+   companion is a construct that travels with the ones this paper already
+   uses. The point is to put the material in front of the author and let
+   the judgment stay with them. */
+
+function modifiers(name){
+  const t=normTxt(name).split(" ").filter(x=>x && !STOPW.has(x));
+  return t.slice(0,-1);
+}
+function lastWord(name){
+  const t=normTxt(name).split(" ").filter(x=>x && !STOPW.has(x));
+  return t.length ? t[t.length-1] : "";
+}
+/* the corpus writes the same head as capability and capabilities, so a
+   lookup has to try both before calling a name unused */
+function nameForms(h){
+  const f=[h];
+  if(/y$/.test(h)) f.push(h.replace(/y$/,"ies")); else f.push(h+"s");
+  if(/ies$/.test(h)) f.push(h.replace(/ies$/,"y"));
+  if(/s$/.test(h)) f.push(h.replace(/s$/,""));
+  return [...new Set(f)];
+}
+function lookupName(mod, h){
+  for(const form of nameForms(h)){
+    const r=NAMEMAP.get(mod+" "+form);
+    if(r) return r;
+  }
+  return null;
+}
+
+function vocabGrid(top, borrowed){
+  const mods=[], seenM=new Set();
+  for(const c of top.slice(0,3))
+    for(const m of modifiers(c.k))
+      if(m.length>3 && !seenM.has(m)){ seenM.add(m); mods.push(m); }
+  /* the qualifiers the paper borrows as well as the ones it coins, so the
+     grid has cells the field has actually filled to read the empty ones against */
+  for(const b of borrowed){
+    for(const m of modifiers(b.rec.n))
+      if(m.length>3 && !seenM.has(m)){ seenM.add(m); mods.push(m); }
+    if(mods.length>=7) break;
+  }
+  const heads=[], seenH=new Set();
+  for(const c of top.slice(0,4)){
+    const h=lastWord(c.k);
+    if(h && !seenH.has(h)){ seenH.add(h); heads.push(h); }
+  }
+  for(const b of borrowed){
+    const h=lastWord(b.rec.n);
+    if(h && !seenH.has(h)){ seenH.add(h); heads.push(h); }
+    if(heads.length>=7) break;
+  }
+  return {mods:mods.slice(0,7), heads:heads.slice(0,7)};
+}
+
+/* constructs the corpus ties to the ones this paper uses, divided by how
+   much company each keeps overall, so a construct that is everywhere does
+   not fill the list */
+function companions(inPaper){
+  const deg=new Map(), score=new Map(), via=new Map();
+  for(const e of GRAPH.edges){
+    deg.set(e[0],(deg.get(e[0])||0)+1);
+    deg.set(e[1],(deg.get(e[1])||0)+1);
+  }
+  for(const e of GRAPH.edges){
+    const a=e[0], b=e[1], n=e[2];
+    const aIn=inPaper.has(a), bIn=inPaper.has(b);
+    if(aIn===bIn) continue;
+    const out=aIn?b:a, src=aIn?a:b;
+    score.set(out,(score.get(out)||0)+n);
+    if(!via.has(out)) via.set(out,[]);
+    via.get(out).push(src);
+  }
+  const rows=[];
+  for(const [i,s] of score){
+    const rec=BYI.get(i); if(!rec) continue;
+    rows.push({i, rec, s:s/Math.sqrt(Math.max(deg.get(i)||1,1)), via:via.get(i)});
+  }
+  rows.sort((a,b)=>b.s-a.s || b.rec.p-a.rec.p);
+  return rows.slice(0,8);
+}
+
+const FILLER=new Set(("toward towards within across through between during because although "+
+  "whereby wherein rather instead itself themselves another others particular various certain "+
+  "including related associated involving regarding").split(" "));
+function listOf(items){
+  if(items.length<=1) return items[0]||"";
+  return items.slice(0,-1).join(", ")+" and "+items[items.length-1];
+}
+function defWords(d){
+  return new Set(normTxt(d).split(" ").filter(x=>x && !STOPW.has(x) && x.length>3));
+}
+/* how far apart the corpus definitions of one construct are, measured as the
+   share of content words the least similar pair have in common */
+function defSpread(defs){
+  let lo=2, pair=null, sum=0, n=0;
+  for(let i=0;i<defs.length;i++)
+    for(let j=i+1;j<defs.length;j++){
+      const A=defWords(defs[i].d), B=defWords(defs[j].d);
+      let inter=0; for(const x of A) if(B.has(x)) inter++;
+      const u=A.size+B.size-inter;
+      const v=u ? inter/u : 1;
+      sum+=v; n++;
+      if(v<lo){ lo=v; pair=[defs[i],defs[j]]; }
+    }
+  return {score: n?sum/n:1, pair:pair};
+}
+function roleLine(rec){
+  const r=rec.r||{};
+  const tot=Object.values(r).reduce((a,b)=>a+b,0);
+  if(!tot) return "";
+  const best=Object.entries(r).sort((a,b)=>b[1]-a[1])[0];
+  const share=Math.round(best[1]/tot*100);
+  if(share<60) return "The corpus uses it in several structural positions, with no settled default.";
+  return "The corpus puts it in the "+esc(best[0])+" position in "+share+" per cent of its mentions.";
+}
+
+async function takeItFurther(top, borrowed){
+  const P=[];
+  P.push('<h2>Taking it further</h2>');
+  P.push('<p class="note">Four readings of the same ledger, meant as material to argue with '+
+    'rather than advice to follow. The names come from the corpus vocabulary, the definitions '+
+    'are the ones published papers actually wrote, and the companions are constructs that '+
+    'travel with the ones already in your text.</p>');
+
+  /* 1. the names your own vocabulary allows */
+  const G=vocabGrid(top, borrowed);
+  if(G.mods.length && G.heads.length){
+    let taken=0, free=0, rows='';
+    for(const m of G.mods){
+      let tds='';
+      for(const h of G.heads){
+        const r=lookupName(m,h);
+        if(r){ taken++;
+          tds+='<td class="num" data-i="'+r.i+'" style="cursor:pointer"><b>'+r.p+'</b></td>'; }
+        else { free++; tds+='<td class="num" style="color:var(--ink-3)">&middot;</td>'; }
+      }
+      rows+='<tr><td>'+esc(tc(m))+'</td>'+tds+'</tr>';
+    }
+    P.push('<h3 class="sec">Names this vocabulary allows</h3>');
+    P.push('<p class="note" style="margin:0 0 8px">Rows are the qualifiers your own constructs '+
+      'use. Columns are head nouns taken from your constructs and from the ones you borrow. '+
+      'A number is the count of papers using that name already, and a dot is a name the corpus '+
+      'has never used. Of the '+(taken+free)+' names this grid holds, '+free+' have never been '+
+      'written down, which is either an opening or a sign that the combination makes no sense.</p>');
+    P.push('<table><thead><tr><th></th>'+
+      G.heads.map(h=>'<th class="num">'+esc(tc(h))+'</th>').join("")+
+      '</tr></thead><tbody>'+rows+'</tbody></table>');
+  }
+
+  /* 2. how the family writes its definitions */
+  for(const c of top.slice(0,2)){
+    const nb=neighbours(c.k);
+    const sibs=nb.lex.slice(0,3);
+    if(!sibs.length) continue;
+    const got=[];
+    for(const s of sibs){
+      try{
+        const d=await detail(s.i);
+        if(d && d.defs && d.defs.length) got.push({rec:s, def:d.defs[0]});
+      }catch(e){}
+    }
+    if(!got.length) continue;
+    const counts=new Map();
+    for(const g of got) for(const w of defWords(g.def.d))
+      if(w.length>5 && !FILLER.has(w)) counts.set(w,(counts.get(w)||0)+1);
+    const shared=[...counts].filter(x=>x[1]>=2).sort((a,b)=>b[1]-a[1]).slice(0,6).map(x=>x[0]);
+    P.push('<h3 class="sec">Defining '+esc(tc(c.k))+' against its family</h3>');
+    const many = got.length>1 ? ('these '+(got.length===2?'two':'three')) : 'this one';
+    P.push('<p class="note" style="margin:0 0 10px">Here is how the corpus defines the nearest '+
+      'constructs with the same head noun. If '+many+' would cover your construct as well, '+
+      'what you have is a new name for something the field already carries.</p>');
+    for(const g of got)
+      P.push('<div class="defn">'+esc(g.def.d)+'<div class="m">'+esc(tc(g.rec.n))+
+        ' &middot; '+esc(g.def.j||"")+(g.def.y?' &middot; '+g.def.y:'')+'</div></div>');
+    if(shared.length>=2)
+      P.push('<p class="note">All of them turn on the same few words: '+
+        shared.map(w=>'<em>'+esc(w)+'</em>').join(", ")+
+        '. Those carry the genus. What your definition has to supply is the part that '+
+        'separates '+esc(tc(c.k))+' from the three above.</p>');
+    P.push('<p class="note" style="margin-top:6px"><b>'+esc(tc(c.k))+'</b> is a '+
+      esc(head(c.k))+' that &hellip;, which separates it from '+
+      listOf(got.map(g=>'<em>'+esc(tc(g.rec.n))+'</em>'))+'.</p>');
+  }
+
+  /* 3. constructs the corpus would expect alongside yours */
+  const inPaper=new Set(borrowed.map(b=>b.rec.i));
+  const comp=companions(inPaper).filter(r=>!inPaper.has(r.i));
+  if(comp.length){
+    P.push('<h3 class="sec">Constructs that usually travel with yours</h3>');
+    P.push('<p class="note" style="margin:0 0 8px">Each of these appears in the same paper as '+
+      'one of your constructs far more often than their separate frequencies predict, and none '+
+      'of them appears in your text. Leaving one out is a decision worth making on purpose.</p>');
+    P.push('<table><thead><tr><th>Construct</th><th class="num">Papers</th>'+
+      '<th>Attaches to</th></tr></thead><tbody>');
+    for(const r of comp){
+      const vias=[...new Set(r.via)].slice(0,2)
+        .map(i=>'<em>'+esc(tc((BYI.get(i)||{n:"?"}).n))+'</em>').join(", ");
+      P.push('<tr data-i="'+r.i+'"><td>'+esc(tc(r.rec.n))+'</td><td class="num">'+r.rec.p+
+        '</td><td>'+vias+'</td></tr>');
+    }
+    P.push('</tbody></table>');
+  }
+
+  /* 4. the borrowed constructs whose definitions disagree most */
+  const pool=borrowed.filter(b=>b.rec.p>=5).slice(0,8);
+  const scored=[];
+  for(const b of pool){
+    try{
+      const d=await detail(b.rec.i);
+      if(!d || !d.defs || d.defs.length<2) continue;
+      const s=defSpread(d.defs.slice(0,5));
+      if(s.pair) scored.push({rec:b.rec, s});
+    }catch(e){}
+  }
+  scored.sort((a,b)=>a.s.score-b.s.score);
+  if(scored.length){
+    P.push('<h3 class="sec">Borrowed constructs worth defining explicitly</h3>');
+    P.push('<p class="note" style="margin:0 0 10px">Ranked by how little the corpus definitions '+
+      'of each one have in common. The two shown for each are the furthest apart of them, so '+
+      'they are the two readings a reviewer could be holding while reading your paper.</p>');
+    for(const r of scored.slice(0,3)){
+      P.push('<div class="detail" style="border-top-width:1px;margin-top:16px;padding-top:14px">'+
+        '<h3 style="font-size:17px">'+esc(tc(r.rec.n))+'</h3>'+
+        '<p class="meta">'+r.rec.p+(r.rec.p===1?' paper':' papers')+' &middot; its definitions '+
+        'share '+Math.round(r.s.score*100)+' per cent of their wording on average</p>'+
+        '<div class="defn">'+esc(r.s.pair[0].d)+'<div class="m">'+
+        esc(r.s.pair[0].j||"")+(r.s.pair[0].y?' &middot; '+r.s.pair[0].y:'')+'</div></div>'+
+        '<div class="defn">'+esc(r.s.pair[1].d)+'<div class="m">'+
+        esc(r.s.pair[1].j||"")+(r.s.pair[1].y?' &middot; '+r.s.pair[1].y:'')+'</div></div>'+
+        '<p class="note" style="margin:8px 0 0">'+roleLine(r.rec)+'</p></div>');
+    }
+  }
+  return P.join("");
+}
+
 async function runCheck(){
   const text=document.getElementById("paperText").value;
   const out=document.getElementById("checkOut");
@@ -1440,10 +1678,26 @@ async function runCheck(){
         (dropped.length>10?', and others':'')+'.' : '')+'</p>');
   }
 
+  P.push('<div id="further"></div>');
+
   out.innerHTML=P.join("");
-  out.querySelectorAll("tbody tr[data-i]").forEach(tr=>tr.onclick=()=>{
-    showTab("browse"); showDetail(+tr.dataset.i);
-  });
+  const wire=root=>{
+    root.querySelectorAll("tbody tr[data-i]").forEach(tr=>tr.onclick=()=>{
+      showTab("browse"); showDetail(+tr.dataset.i);
+    });
+    root.querySelectorAll("td[data-i]").forEach(td=>td.onclick=ev=>{
+      ev.stopPropagation(); showTab("browse"); showDetail(+td.dataset.i);
+    });
+  };
+  wire(out);
+  /* the further reading needs the definition shards, so it arrives after the
+     rest of the page rather than holding it up */
+  const fbox=document.getElementById("further");
+  if(fbox){
+    fbox.innerHTML='<p class="note" style="margin-top:26px">Reading the definitions&hellip;</p>';
+    takeItFurther(top, borrowed).then(html=>{ fbox.innerHTML=html; wire(fbox); })
+      .catch(e=>{ fbox.innerHTML=''; });
+  }
   if(nodeList.length >= 3){
     drawNetwork(document.getElementById("figNet"), nodeList, links, {seed:11, key:[
       {fill:"var(--s1)", text:"already in the ledger"},
