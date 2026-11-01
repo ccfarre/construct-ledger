@@ -164,11 +164,6 @@ of context either side, and the DOI. That is what verification needs; the corpus
 remains with its publishers. The construct names, definitions and structural roles are
 model output over published abstracts.
 
-## Citation
-
-Carrasco-Farré, C. (2026). *Construct Ledger: an auditable map of a field's theoretical
-vocabulary.* Research artifact.
-
 ## Licence
 
 Code is MIT, see `LICENSE`. The derived ledger in `data/` is released for research use;
